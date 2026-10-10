@@ -1,0 +1,110 @@
+Design Spec: tpt-replicate (Layer 3)
+1. Mission & Scope
+Mission: To provide a unified, pure-Rust, offline-first, peer-to-peer synchronization and CRDT merge engine. It streams tpt-operations between peers, resolves concurrent edits deterministically, manages logical clocks, and ensures eventual consistency across distributed nodes, whether they are on a local LAN, the public internet, or an orbital delay-tolerant network.
+Scope:
+In Scope: Logical time (Hybrid Logical Clocks), replicated operation logs, delta-sync protocols (calculating what a peer is missing), CRDT merge execution, offline-first queuing, and transport-agnostic peer messaging.
+Out of Scope: The physical network transport (handled by tpt-webrtc or standard TCP/UDP), the actual CRDT mathematical definitions (handled by tpt-operations), and persistent commit storage (handled by tpt-version).
+2. Core Constraints & Architecture
+Zero C-FFI: 100% Pure Rust.
+no_std + alloc: The sync protocol and merge logic must run in no_std environments. This is critical for tpt-teleop-space, where a rover might need to sync state with an orbiter using minimal memory.
+Offline-First: The system must function perfectly when disconnected. Operations are queued locally and synchronized automatically when the connection is restored.
+Deterministic Convergence: Given the same set of operations (regardless of the order they arrive), all peers must converge to the exact same final state.
+The Dependency Map
+Operations: tpt-operations (Provides the CrdtCompatible traits, Operation definitions, and inverse logic).
+Versioning: tpt-version (Periodically snapshots the replicated log into permanent, signed commits).
+Identity: tpt-primitives (Provides ActorId and capability tokens for peer authentication).
+Crypto: tpt-crypto (Signs operation batches to prevent tampering in transit).
+3. Core Modules & API Design
+Module A: tpt_replicate::clock (Logical Time)
+In a distributed system, physical clocks lie. We need a way to order events causally.
+Hybrid Logical Clocks (HLC): Combines physical timestamps (for human readability) with logical counters (to guarantee uniqueness and ordering during clock skew or concurrent edits).
+Vector Clocks: Tracks the causal history of operations per-peer. Used to determine if Operation A happened before, after, or concurrently with Operation B.
+Key Struct:
+pub struct Timestamp {
+    pub wall_time: u64, // Milliseconds since epoch
+    pub logical_counter: u32,
+    pub actor_id: ActorId,
+}
+
+pub struct VectorClock {
+    pub peers: BTreeMap<ActorId, u64>,
+}
+Module B: tpt_replicate::log (The Replicated Log)
+The local, append-only log of operations that have been applied to the state.
+OpLog: A sequence of StampedOperation (an operation wrapped with its HLC timestamp and author).
+Watermarks: Tracks the "High Watermark" (the latest timestamp we've seen from each peer) to efficiently calculate deltas.
+Key Struct:
+pub struct StampedOperation {
+    pub timestamp: Timestamp,
+    pub actor: ActorId,
+    pub op: UirNode, // The serialized tpt-operation
+}
+
+pub struct ReplicatedLog {
+    pub ops: Vec<StampedOperation>,
+    pub watermarks: BTreeMap<ActorId, Timestamp>,
+}
+Module C: tpt_replicate::sync (The Delta Protocol)
+The engine that figures out what to send to a peer to bring them up to date.
+Delta Calculation: When Peer A connects to Peer B, A sends its VectorClock. B compares it to its own log, identifies all operations A is missing, and streams them back.
+Batching & Compression: Operations are batched and compressed (using tpt-uir's efficient serialization) to minimize bandwidth.
+Key Function:
+pub fn calculate_delta(
+    local_log: &ReplicatedLog,
+    peer_clock: &VectorClock,
+) -> Vec<StampedOperation>;
+Module D: tpt_replicate::merge (The CRDT Executor)
+The engine that takes incoming operations from peers and applies them to the local state.
+Causal Ordering: Incoming ops are placed in a priority queue based on their HLC timestamps. They are only applied when all causally preceding ops have been received.
+Commutative Application: Because the ops implement tpt_operations::crdt::CrdtCompatible, the merge engine can apply them in timestamp order, regardless of network arrival order, and guarantee convergence.
+Key Function:
+pub fn apply_remote_ops(
+    state: &mut impl State,
+    log: &mut ReplicatedLog,
+    incoming_ops: Vec<StampedOperation>,
+) -> Result<(), MergeError>;
+Module E: tpt_replicate::peer (Connection Management)
+Manages the lifecycle of connections to other nodes.
+Peer State: Tracks connection status (Connecting, Syncing, UpToDate, Disconnected).
+Heartbeats & Keepalives: Ensures dead connections are detected and cleaned up.
+Transport Agnostic: Exposes a Transport trait. The actual bytes can be sent over WebRTC data channels (tpt-webrtc), raw TCP, or even stored in a file for Delay-Tolerant Networking (tpt-teleop-space).
+4. The Processing Pipeline
+How two users edit a CAD model simultaneously:
+Local Action: User A moves a vertex. The UI creates a MoveCadVertex op.
+Local Apply: The op is applied to User A's local state immediately (optimistic UI).
+Local Log: The op is stamped with an HLC timestamp, signed via tpt-crypto, and appended to User A's ReplicatedLog.
+Broadcast: User A's tpt-replicate engine sees the new op and broadcasts it to all connected peers (including User B).
+Receive: User B's engine receives the op. It checks the causal dependencies (Vector Clock).
+Merge: If the op is causally ready, it is applied to User B's state. Because it's a CRDT-compatible op, it merges cleanly with whatever User B is doing.
+Ack: User B updates its watermark and sends an acknowledgment back to User A.
+Snapshot (Background): Periodically, the ReplicatedLog is compacted and saved as a permanent commit in tpt-version to prevent the log from growing infinitely.
+5. Integration with the TPT Ecosystem
+tpt-vertex (CAD): Uses tpt-replicate to stream vertex/edge/face operations between designers. If two users move the same vertex, the HLC timestamps determine the final position deterministically.
+tpt-lattice (Spreadsheets): Cell edits are synced via tpt-replicate. Because cell updates are Idempotent and Commutative, two users typing in the same cell will result in a clean Last-Write-Wins (LWW) resolution based on the HLC timestamp.
+tpt-teleop-space (Orbital Robotics): Uses the Transport trait to sync state over Delay-Tolerant Networks. If a rover loses connection to the orbiter, it queues operations locally. When the link is re-established, calculate_delta ensures only the missing ops are transmitted, saving massive amounts of bandwidth.
+tpt-version: tpt-replicate handles the live state. Once an hour (or after N operations), it hands the finalized state off to tpt-version to create a signed, immutable commit.
+tpt-operations: tpt-replicate relies entirely on the CrdtCompatible traits defined in tpt-operations to know how to merge concurrent changes safely.
+6. Testing & Quality Strategy
+Deterministic Convergence Testing: Using tpt-testkit::property, we spawn 5 virtual peers. We generate 1,000 random operations and distribute them to the peers in random, shuffled orders. We assert that after all ops are processed, all 5 peers have the exact same state hash.
+Network Partition Simulation: We simulate a network drop for Peer A. We continue generating ops on Peers B and C. We then "reconnect" Peer A and assert that calculate_delta correctly brings Peer A up to date without data loss.
+Fuzzing the Sync Protocol: Feed malformed, truncated, or maliciously timestamped operation batches into the merge engine to ensure it fails gracefully and doesn't corrupt the local state.
+7. Roadmap & Milestones
+Phase 1: Clocks & The Log (Weeks 1-3)
+Implement Hybrid Logical Clocks (HLC) and Vector Clocks.
+Implement the ReplicatedLog and watermark tracking.
+Milestone: Can generate causally ordered, unique timestamps across multiple threads.
+Phase 2: The Merge Engine (Weeks 4-6)
+Implement the causal priority queue.
+Integrate tpt-operations to apply incoming CRDT-compatible ops.
+Milestone: Can take a shuffled list of operations and deterministically reconstruct the final state.
+Phase 3: The Sync Protocol (Weeks 7-9)
+Implement calculate_delta using vector clocks.
+Implement batching and compression of operation streams.
+Milestone: Two peers can connect and efficiently sync their missing state.
+Phase 4: Transport & Integration (Weeks 10-12)
+Implement the Transport trait and integrate with tpt-webrtc for browser-based sync.
+Implement the background snapshotting to tpt-version.
+Publish v1.0.0.
+Architect's Note
+The most dangerous trap in distributed sync is "Tombstone Bloat". If a user deletes a CAD part, and that deletion is synced to peers, how do we ensure a peer that was offline doesn't accidentally "resurrect" the part when it reconnects?
+The solution is Tombstones. When an entity is deleted, tpt-replicate doesn't just remove it from the state; it records a Delete operation with a timestamp in the log. The log must retain these tombstones until we are absolutely certain all peers have seen them (which is why the background snapshotting to tpt-version is critical—it allows us to safely garbage-collect ancient tombstones from the live log).
