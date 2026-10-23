@@ -192,3 +192,217 @@ fn malformed_operations_are_refused() {
         .apply(&stamp, &tpt_replicate::stubs::UirNode { bytes: vec![1, 2] })
         .is_err());
 }
+
+#[test]
+fn rga_inserts_and_deletes_locally() {
+    use tpt_replicate::crdt::Rga;
+    let clock = ManualClock::new(1_000);
+    let mut doc = Replica::builder(ActorId(1), Rga::default())
+        .shared_secret(SECRET)
+        .clock(Box::new(clock.clone()))
+        .build()
+        .expect("replica");
+    let text = |doc: &Replica<Rga>| -> String {
+        doc.state()
+            .iter()
+            .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+            .collect()
+    };
+    for (index, ch) in ["b", "c"].iter().enumerate() {
+        clock.advance(1);
+        let after = doc.state().after_index(index);
+        doc.local_op(Rga::insert(after, ch.as_bytes())).unwrap();
+    }
+    clock.advance(1);
+    let head = doc.state().after_index(0);
+    doc.local_op(Rga::insert(head, b"a")).unwrap();
+    assert_eq!(text(&doc), "abc");
+
+    clock.advance(1);
+    let middle = doc.state().id_at(1).unwrap();
+    doc.local_op(Rga::delete(middle)).unwrap();
+    assert_eq!(text(&doc), "ac");
+}
+
+#[test]
+fn rga_replicas_agree_under_shuffled_delivery() {
+    use tpt_replicate::crdt::Rga;
+
+    // One author writes a document with inserts and deletes. Another replica receives the same
+    // operations in a shuffled order, and must end up with the same text.
+    let clock = ManualClock::new(1_000);
+    let mut writer = Replica::builder(ActorId(1), Rga::default())
+        .shared_secret(SECRET)
+        .clock(Box::new(clock.clone()))
+        .build()
+        .expect("replica");
+    let mut seed = 0x9E37_79B9u64;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        seed >> 33
+    };
+    for step in 0..60u64 {
+        clock.advance(1);
+        let len = writer.state().len();
+        if len > 3 && next() % 4 == 0 {
+            let index = (next() as usize) % len;
+            let target = writer.state().id_at(index).unwrap();
+            writer.local_op(Rga::delete(target)).unwrap();
+        } else {
+            let index = (next() as usize) % (len + 1);
+            let after = if index == 0 {
+                None
+            } else {
+                writer.state().after_index(index)
+            };
+            let value = format!("{step}");
+            writer
+                .local_op(Rga::insert(after, value.as_bytes()))
+                .unwrap();
+        }
+    }
+    let ops: Vec<_> = writer.log().ops().to_vec();
+
+    for round in 0..5u64 {
+        let mut order = ops.clone();
+        let mut state = round.wrapping_add(7);
+        for i in (1..order.len()).rev() {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            order.swap(i, (state >> 33) as usize % (i + 1));
+        }
+        let mut reader = Replica::builder(ActorId(2), Rga::default())
+            .shared_secret(SECRET)
+            .clock(Box::new(clock.clone()))
+            .build()
+            .expect("replica");
+        reader.import_ops(order).unwrap();
+        assert_eq!(reader.log().len(), ops.len());
+        assert_eq!(
+            reader.state().state_hash(),
+            writer.state().state_hash(),
+            "round {round}"
+        );
+        assert_eq!(
+            reader
+                .state()
+                .iter()
+                .map(|(_, v)| v.to_vec())
+                .collect::<Vec<_>>(),
+            writer
+                .state()
+                .iter()
+                .map(|(_, v)| v.to_vec())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn rga_snapshot_round_trips_with_tombstones_and_rejects_garbage() {
+    use tpt_replicate::crdt::Rga;
+    let clock = ManualClock::new(1_000);
+    let mut doc = Replica::builder(ActorId(1), Rga::default())
+        .shared_secret(SECRET)
+        .clock(Box::new(clock.clone()))
+        .build()
+        .expect("replica");
+    doc.local_op(Rga::insert(None, b"x")).unwrap();
+    clock.advance(1);
+    let x = doc.state().id_at(0).unwrap();
+    doc.local_op(Rga::insert(Some(x), b"y")).unwrap();
+    clock.advance(1);
+    doc.local_op(Rga::delete(x)).unwrap();
+
+    let bytes = doc.state().encode_state();
+    let decoded = Rga::decode_state(&bytes).unwrap();
+    assert_eq!(decoded.state_hash(), doc.state().state_hash());
+    assert_eq!(decoded.len(), 1);
+    assert!(Rga::decode_state(&bytes[..bytes.len() - 1]).is_err());
+}
+
+#[test]
+fn rga_refuses_references_it_has_not_seen() {
+    use tpt_replicate::crdt::Rga;
+    use tpt_replicate::error::ApplyError;
+    use tpt_replicate::stubs::{CrdtCompatible, UirNode};
+    let mut doc = Rga::default();
+    let stamp = Timestamp {
+        wall_time: 5,
+        logical_counter: 0,
+        actor_id: ActorId(1),
+    };
+    let unknown = Timestamp {
+        wall_time: 2,
+        logical_counter: 0,
+        actor_id: ActorId(9),
+    };
+    assert_eq!(
+        doc.apply(&stamp, &Rga::insert(Some(unknown), b"z")),
+        Err(ApplyError::Invalid("unknown reference"))
+    );
+    assert_eq!(
+        doc.apply(&stamp, &Rga::delete(unknown)),
+        Err(ApplyError::Invalid("unknown element"))
+    );
+    assert!(doc.apply(&stamp, &UirNode { bytes: vec![9] }).is_err());
+    assert!(doc.is_empty());
+}
+
+#[test]
+fn rga_orders_concurrent_inserts_the_same_way_everywhere() {
+    use tpt_replicate::crdt::Rga;
+    // Two authors insert after the same element without seeing each other's edits.
+    let clock = ManualClock::new(1_000);
+    let doc = |actor: u64| {
+        Replica::builder(ActorId(actor), Rga::default())
+            .shared_secret(SECRET)
+            .clock(Box::new(clock.clone()))
+            .build()
+            .expect("replica")
+    };
+    let mut ada = doc(1);
+    let mut bo = doc(2);
+    ada.local_op(Rga::insert(None, b"x")).unwrap();
+    bo.import_ops(ada.log().ops().to_vec()).unwrap();
+    let x = ada.state().id_at(0).unwrap();
+
+    clock.advance(1);
+    ada.local_op(Rga::insert(Some(x), b"a")).unwrap();
+    clock.advance(1);
+    bo.local_op(Rga::insert(Some(x), b"b")).unwrap();
+
+    let ada_ops = ada.log().ops().to_vec();
+    let bo_ops = bo.log().ops().to_vec();
+    let mut ada_gets_bo: Vec<_> = bo_ops
+        .iter()
+        .filter(|op| op.actor == ActorId(2))
+        .cloned()
+        .collect();
+    ada.import_ops(std::mem::take(&mut ada_gets_bo)).unwrap();
+    bo.import_ops(
+        ada_ops
+            .iter()
+            .filter(|op| op.actor == ActorId(1))
+            .cloned()
+            .collect(),
+    )
+    .unwrap();
+
+    let text = |r: &Replica<Rga>| -> String {
+        r.state()
+            .iter()
+            .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+            .collect()
+    };
+    assert_eq!(text(&ada), text(&bo));
+    assert_eq!(
+        text(&ada),
+        "xba",
+        "the later insert goes first after the shared element"
+    );
+    assert_eq!(ada.state().state_hash(), bo.state().state_hash());
+}

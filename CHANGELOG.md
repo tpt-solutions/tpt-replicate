@@ -56,6 +56,8 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - Faster merging: waiting operations are indexed by the one cause blocking them, so draining a backlog no longer rescans the whole buffer. Reversed delivery of 1000 operations went from about 4.8 ms to 1.7 ms, and ordered delivery from 9.7 ms to 1.8 ms (`benches/merge.rs`).
 
+- `crdt::Rga`: a replicated sequence (RGA). Concurrent inserts at one position are ordered by timestamp, and deletes leave tombstones. Tested under shuffled delivery and with two concurrent authors.
+
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).
