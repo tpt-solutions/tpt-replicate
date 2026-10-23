@@ -109,7 +109,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] Regression test for each fix above (`tests/regressions.rs`, `tests/transport_limits.rs`). They were written against the fixed code and not run against the pre-fix code.
 
 ### B. Missing features
-- [x] Snapshot transfer (`State::encode_state` / `decode_state`, `Snapshot` wire message). **Not done:** chunked snapshots for states above one frame (16 MiB)
+- [x] Snapshot transfer (`State::encode_state` / `decode_state`, `Snapshot` wire message). Chunked over several frames (`SnapshotBegin` and `SnapshotChunk`), and states above 256 MiB are refused
 - [x] TCP listener and auto-reconnect with backoff (`TcpAcceptor`, `ReconnectingTcp`). The application maps accepted connections to peers
 - [x] `Authorizer` trait (capability hook, default allow-all) — implemented as `OpPolicy` (`AllowAll` default), which also covers the next item
 - [x] App-level op validation hook — `OpPolicy::check` returns `ApplyError::Invalid(reason)`; refusals are quarantined like state refusals

@@ -25,7 +25,10 @@ use crate::merge::{AllowAll, MergeLimits, MergeReport, Merger, OpPolicy, DEFAULT
 use crate::peer::{Peer, PeerState};
 use crate::stubs::crypto::{Signer, Verifier};
 use crate::stubs::{ActorId, Snapshot, SnapshotSink, State, UirNode};
-use crate::sync::{calculate_delta, chunk_ops, Envelope, Message, SnapshotMsg};
+use crate::sync::{calculate_delta, chunk_ops, Envelope, Message, SnapshotHeader};
+
+/// Largest encoded state a peer may send in one snapshot. Bounds the memory a receiver commits to.
+pub const MAX_SNAPSHOT_BYTES: usize = 1 << 28;
 use crate::transport::Transport;
 
 /// Most events kept while the application has not drained them. Older events are dropped first.
@@ -154,6 +157,14 @@ pub struct LogImage {
 struct Link {
     transport: Box<dyn Transport>,
     peer: Peer,
+    /// A snapshot being received on this link, if any.
+    incoming: Option<PendingSnapshot>,
+}
+
+/// A snapshot whose state is still arriving in chunks.
+struct PendingSnapshot {
+    header: SnapshotHeader,
+    bytes: Vec<u8>,
 }
 
 enum Failure {
@@ -392,6 +403,7 @@ impl<S: State> Replica<S> {
             Link {
                 transport,
                 peer: Peer::new(peer),
+                incoming: None,
             },
         );
     }
@@ -532,6 +544,8 @@ impl<S: State> Replica<S> {
     fn lose_link(&mut self, link: &mut Link) {
         let was_connected = matches!(link.peer.state, PeerState::Syncing | PeerState::UpToDate);
         link.peer.connection_lost();
+        // A snapshot cut off mid-way cannot finish on this link. The next handshake sends it again.
+        link.incoming = None;
         if was_connected {
             push_event(&mut self.events, Event::PeerDisconnected(link.peer.id));
         }
@@ -584,7 +598,8 @@ impl<S: State> Replica<S> {
                     Err(FrameError::UnexpectedPong.into())
                 }
             }
-            Message::Snapshot(snapshot) => Ok(self.adopt_snapshot(link, &snapshot)?),
+            Message::SnapshotBegin(header) => Ok(self.begin_snapshot(link, *header)?),
+            Message::SnapshotChunk(chunk) => Ok(self.take_snapshot_chunk(link, &chunk)?),
         }
     }
 
@@ -637,16 +652,56 @@ impl<S: State> Replica<S> {
         // instead. Installing it leaves the peer at our compacted clock, so the delta that follows
         // starts from there.
         push_event(&mut self.events, Event::PeerNeedsSnapshot(link.peer.id));
-        let snapshot = SnapshotMsg {
-            state: self.state.encode_state(),
+        let state = self.state.encode_state();
+        let header = SnapshotHeader {
+            state_len: state.len(),
             state_hash: self.state.state_hash(),
             clock: self.log.clock().clone(),
             compacted: self.log.compacted().clone(),
             floor: self.merger.floor(),
         };
-        self.transmit(link, &Message::Snapshot(Box::new(snapshot)))?;
+        self.transmit(link, &Message::SnapshotBegin(Box::new(header)))?;
+        for chunk in state.chunks(DELTA_BYTE_BUDGET) {
+            self.transmit(link, &Message::SnapshotChunk(chunk.to_vec()))?;
+        }
         let compacted = self.log.compacted().clone();
         self.send_ops_after(link, &compacted)
+    }
+
+    /// Starts receiving a snapshot on `link`. A new header replaces any snapshot still arriving.
+    fn begin_snapshot(
+        &mut self,
+        link: &mut Link,
+        header: SnapshotHeader,
+    ) -> Result<(), FrameError> {
+        if header.state_len == 0 || header.state_len > MAX_SNAPSHOT_BYTES {
+            return Err(FrameError::BadSnapshot(SnapshotError::Malformed));
+        }
+        link.incoming = Some(PendingSnapshot {
+            header,
+            bytes: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Appends one chunk. Once the state is complete it is installed.
+    fn take_snapshot_chunk(&mut self, link: &mut Link, chunk: &[u8]) -> Result<(), FrameError> {
+        let malformed = FrameError::BadSnapshot(SnapshotError::Malformed);
+        let Some(pending) = link.incoming.as_mut() else {
+            return Err(malformed);
+        };
+        if pending.bytes.len() + chunk.len() > pending.header.state_len {
+            link.incoming = None;
+            return Err(malformed);
+        }
+        pending.bytes.extend_from_slice(chunk);
+        if pending.bytes.len() < pending.header.state_len {
+            return Ok(());
+        }
+        let Some(done) = link.incoming.take() else {
+            return Ok(());
+        };
+        self.adopt_snapshot(link, &done.header, &done.bytes)
     }
 
     fn send_ops_after(&mut self, link: &mut Link, clock: &VectorClock) -> Result<(), Failure> {
@@ -664,10 +719,11 @@ impl<S: State> Replica<S> {
     fn adopt_snapshot(
         &mut self,
         link: &mut Link,
-        snapshot: &SnapshotMsg,
+        snapshot: &SnapshotHeader,
+        state_bytes: &[u8],
     ) -> Result<(), FrameError> {
         // Verify before anything else. A snapshot that is not new to us must still be well formed.
-        let mut state = S::decode_state(&snapshot.state).map_err(FrameError::BadSnapshot)?;
+        let mut state = S::decode_state(state_bytes).map_err(FrameError::BadSnapshot)?;
         if state.state_hash() != snapshot.state_hash {
             return Err(FrameError::BadSnapshot(SnapshotError::HashMismatch));
         }
