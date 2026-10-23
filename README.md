@@ -8,9 +8,14 @@ Pure-Rust, offline-first replication engine for the TPT ecosystem. It provides:
 - **Delta sync** (`sync`, `engine`): a Hello, Delta, Ack handshake that sends only what a peer lacks, in bounded batches, with snapshot transfer for peers behind compaction.
 - **Transport-agnostic peers** (`transport`, `peer`): heartbeats, dead-peer detection, automatic resume after reconnection, anti-entropy re-sync, and TCP links that redial with backoff.
 
-The core is `no_std` + `alloc` with no dependencies.
+- **Persistence** (`checkpoint`): `Replica::checkpoint` and `Replica::recover` over a `CheckpointStore`, with in-memory and atomic file stores.
+- **A deterministic network simulator** (`sim`): seeded writes, partitions, late joiners, loss, duplication and reordering, for testing convergence.
+
+The core is `no_std` + `alloc` with no dependencies. Optional features pull in dependencies, listed below.
 
 ## Install
+
+Requires Rust 1.85 or newer.
 
 Until the crate is published, depend on it from git:
 
@@ -24,6 +29,8 @@ Enable the `std` feature for `SystemClock`, file and TCP transports:
 ```toml
 tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate", features = ["std"] }
 ```
+
+The `ed25519`, `version` and `webrtc-app` features fetch their tpt-* crates from GitHub, so they need network access to build.
 
 ## Features
 
@@ -99,12 +106,12 @@ Run any of them with `cargo run --example <name>`. Examples marked `std` also ne
 
 ## Limitations
 
-- **Signatures are a stand-in.** `stubs::crypto` uses a keyed 64-bit hash. It detects accidental and simple tampering and does not resist forgery. Replace it with `tpt-crypto` before deploying across untrusted networks.
+- **Signatures are a stand-in by default.** `stubs::crypto` uses a keyed 64-bit hash. It detects accidental and simple tampering and does not resist forgery. Enable the `ed25519` feature for real signatures from `tpt-crypto` before deploying across untrusted networks.
 - **Snapshots are trusted from peers.** A snapshot replaces the receiver's state. Its hash is checked, but its contents are not validated against the operation policy. Only snapshot from peers you trust.
 - **Snapshot size.** A snapshot streams its encoded state in chunks, and a receiver refuses any state over 256 MiB (`engine::MAX_SNAPSHOT_BYTES`). A peer that cannot receive the whole state in one session can be interrupted, and the next handshake starts it again from the beginning.
 - **Relay is by anti-entropy.** Operations received from one peer are not forwarded live to others. They reach other peers at the next resync, which is every `resync_interval_ms`.
 - **Idle peers pin compaction.** The horizon moves only as fast as the least recently active actor. Compaction is delayed, not unsafe, while an idle peer stays idle.
-- **Stubs.** The `stubs` module stands in for `tpt-operations`, `tpt-primitives`, `tpt-uir`, `tpt-version` and `tpt-webrtc`. Their trait shapes are chosen to be replaceable, but the real APIs are unconfirmed.
+- **Stubs.** The `stubs` module stands in for `tpt-operations`, `tpt-primitives` and `tpt-uir`, which are not wired to real crates yet. `ActorId` stays local by decision. Their trait shapes are chosen to be replaceable, but the real APIs are unconfirmed. `tpt-crypto`, `tpt-version` and `tpt-webrtc` are used for real behind their features (see the table above).
 
 ## Verifying
 
@@ -120,7 +127,7 @@ Both scripts check formatting, build with and without features, run all tests, r
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues as described in [`SECURITY.md`](SECURITY.md).
+Contributions are handled through issues only; pull requests are not accepted. See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues as described in [`SECURITY.md`](SECURITY.md).
 
 ## License
 

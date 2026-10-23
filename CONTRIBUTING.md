@@ -1,7 +1,15 @@
 # Contributing
 
-Thanks for looking at tpt-replicate. It is a replication engine, so correctness matters more than
-speed of change. The notes below say what a change needs before it can be merged.
+Thanks for looking at tpt-replicate. Contributions are handled through issues only. Pull requests
+are not accepted. Open an issue to report a bug, ask a question, or propose a change, and describe
+the behaviour you expect. Do not send code changes as a pull request; they will not be merged.
+
+Security problems are not issues. Report them as described in [`SECURITY.md`](SECURITY.md).
+
+## Rules for any change
+
+The maintainers apply these when they act on an issue. They also describe what a useful report
+should respect.
 
 ## Ground rules
 
@@ -13,9 +21,7 @@ speed of change. The notes below say what a change needs before it can be merged
 - Behaviour that affects convergence (merge order, compaction, snapshot installation, the wire
   format) needs a test that shows the convergence, not only that the code runs.
 
-## Before you open a pull request
-
-Run the same checks CI runs:
+## Checks the maintainers run
 
 ```sh
 sh scripts/ci.sh          # or: powershell -ExecutionPolicy Bypass -File scripts/ci.ps1
@@ -27,22 +33,14 @@ warnings as errors, the bare-metal build, and the dependency check.
 ## Tests
 
 - `tests/convergence.rs`, `tests/semantics.rs`, `tests/snapshot.rs`: scenario tests on the engine.
-- `tests/regressions.rs`: one test per fixed bug. When you fix a bug, add a test here that would
-  fail without the fix.
+- `tests/regressions.rs`: one test per fixed bug.
 - `tests/fuzz.rs`, `tests/log_invariants.rs`: randomized and property-based checks.
 - `tests/transport_std.rs`, `tests/transport_limits.rs`: std transports (`--features std`).
 
 Tests that depend on time use `ManualClock`. Advance it past the resync interval before expecting
 relayed operations to arrive. Tests that use real sockets must not rely on exact timing.
 
-## Commits and pull requests
-
-- Keep a pull request to one change. Describe the behaviour change, and call out anything that
-  changes the wire format or a public trait.
-- Update `CHANGELOG.md` under the unreleased version for user-visible changes.
-- Update `docs/guide.md` when you change the protocol, an event, or a configuration default.
-
 ## Licensing
 
-The project is dual licensed under MIT or Apache-2.0. By submitting a contribution you agree that it
-is licensed the same way, as stated in the Apache-2.0 license (section 5).
+The project is dual licensed under MIT or Apache-2.0. By opening an issue you agree that any
+material you submit is licensed the same way, as stated in the Apache-2.0 license (section 5).
