@@ -47,6 +47,7 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - Checkpoints: `Replica::checkpoint()` encodes the state and log into one blob, and `Replica::recover()` rebuilds a replica from it. Damaged input returns `RecoverError`, never a panic. `CheckpointStore` with `MemoryStore` and, under `std`, `FileStore` (atomic save: temporary file, sync, rename).
 - `crdt` feature: `PnCounter` (up and down counter) and `OrSet` (add-wins set). Both tolerate repeated delivery, which snapshot installation can cause.
+- `Replica::with_event_observer`: a callback that sees every event as it is raised. Polling with `drain_events` still works.
 - `deny.toml` for `cargo deny`, run weekly by the scheduled workflow.
 
 ### Not yet

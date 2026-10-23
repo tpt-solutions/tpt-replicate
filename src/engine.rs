@@ -167,11 +167,36 @@ impl From<FrameError> for Failure {
     }
 }
 
-fn push_event(events: &mut Vec<Event>, event: Event) {
-    if events.len() >= MAX_QUEUED_EVENTS {
-        events.remove(0);
+/// Receives each event as it is raised.
+type EventObserver = Box<dyn FnMut(&Event)>;
+
+/// The event queue, plus an optional observer that sees each event as it is raised.
+struct EventQueue {
+    queue: Vec<Event>,
+    observer: Option<EventObserver>,
+}
+
+impl EventQueue {
+    fn new() -> Self {
+        Self {
+            queue: Vec::new(),
+            observer: None,
+        }
     }
-    events.push(event);
+
+    fn take(&mut self) -> Vec<Event> {
+        core::mem::take(&mut self.queue)
+    }
+}
+
+fn push_event(events: &mut EventQueue, event: Event) {
+    if let Some(observer) = events.observer.as_mut() {
+        observer(&event);
+    }
+    if events.queue.len() >= MAX_QUEUED_EVENTS {
+        events.queue.remove(0);
+    }
+    events.queue.push(event);
 }
 
 /// One replica of a shared state.
@@ -190,7 +215,7 @@ pub struct Replica<S: State> {
     sink: Option<Box<dyn SnapshotSink>>,
     ops_since_snapshot: u64,
     last_snapshot_ms: u64,
-    events: Vec<Event>,
+    events: EventQueue,
 }
 
 impl<S: State> Replica<S> {
@@ -223,7 +248,7 @@ impl<S: State> Replica<S> {
             sink: None,
             ops_since_snapshot: 0,
             last_snapshot_ms: now,
-            events: Vec::new(),
+            events: EventQueue::new(),
         }
     }
 
@@ -305,6 +330,13 @@ impl<S: State> Replica<S> {
         self
     }
 
+    /// Calls `observer` with every event as it is raised. The event queue still holds them, so
+    /// polling with `drain_events` keeps working alongside it.
+    pub fn with_event_observer(mut self, observer: Box<dyn FnMut(&Event)>) -> Self {
+        self.events.observer = Some(observer);
+        self
+    }
+
     /// This replica's identity.
     pub fn actor(&self) -> ActorId {
         self.actor
@@ -350,7 +382,7 @@ impl<S: State> Replica<S> {
     /// Takes all queued events. The queue holds at most [`MAX_QUEUED_EVENTS`]. The oldest are
     /// dropped first.
     pub fn drain_events(&mut self) -> Vec<Event> {
-        core::mem::take(&mut self.events)
+        self.events.take()
     }
 
     /// Registers a peer, or replaces its transport. The link is brought up on the next poll.
