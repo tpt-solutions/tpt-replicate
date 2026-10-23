@@ -26,16 +26,20 @@ pub enum Message {
     Ping(u64),
     /// Reply to [`Message::Ping`] with the same nonce.
     Pong(u64),
-    /// The sender's state, sent when the receiver is behind compaction. The receiver installs it,
-    /// then takes the operations after `compacted` from the delta that follows.
-    Snapshot(Box<SnapshotMsg>),
+    /// Starts a snapshot, sent when the receiver is behind compaction. The state follows in
+    /// [`Message::SnapshotChunk`] frames. Once all of it has arrived, the receiver installs it, then
+    /// takes the operations after `compacted` from the delta that follows.
+    SnapshotBegin(Box<SnapshotHeader>),
+    /// The next bytes of the encoded state. Chunks arrive in order on a link.
+    SnapshotChunk(Vec<u8>),
 }
 
-/// The payload of [`Message::Snapshot`].
+/// The first part of a snapshot. The state itself follows in chunks.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SnapshotMsg {
-    /// [`State::encode_state`](crate::stubs::State::encode_state) of the sender's state.
-    pub state: Vec<u8>,
+pub struct SnapshotHeader {
+    /// Length in bytes of [`State::encode_state`](crate::stubs::State::encode_state) for the
+    /// sender's state. The chunks add up to this.
+    pub state_len: usize,
     /// [`State::state_hash`](crate::stubs::State::state_hash) of that state. The receiver checks it after decoding.
     pub state_hash: u64,
     /// The sender's full clock. Operations the receiver has beyond it are kept and re-applied.

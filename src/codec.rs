@@ -7,7 +7,7 @@ use crate::clock::{Timestamp, VectorClock};
 use crate::error::CodecError;
 use crate::log::StampedOperation;
 use crate::stubs::{ActorId, UirNode};
-use crate::sync::{Message, SnapshotMsg};
+use crate::sync::{Message, SnapshotHeader};
 use alloc::boxed::Box;
 
 /// Largest accepted operation payload, in bytes.
@@ -26,7 +26,8 @@ const TAG_DELTA: u8 = 1;
 const TAG_ACK: u8 = 2;
 const TAG_PING: u8 = 3;
 const TAG_PONG: u8 = 4;
-const TAG_SNAPSHOT: u8 = 5;
+const TAG_SNAPSHOT_BEGIN: u8 = 5;
+const TAG_SNAPSHOT_CHUNK: u8 = 6;
 
 /// Encodes and decodes message bodies. Implementations must round-trip exactly and must return
 /// an error, not panic, on malformed input.
@@ -68,9 +69,13 @@ impl Codec for BinaryCodec {
                 w.u8(TAG_PONG);
                 w.varint(*nonce);
             }
-            Message::Snapshot(snapshot) => {
-                w.u8(TAG_SNAPSHOT);
-                w.bytes(&snapshot.state);
+            Message::SnapshotChunk(bytes) => {
+                w.u8(TAG_SNAPSHOT_CHUNK);
+                w.bytes(bytes);
+            }
+            Message::SnapshotBegin(snapshot) => {
+                w.u8(TAG_SNAPSHOT_BEGIN);
+                w.varint(snapshot.state_len as u64);
                 w.varint(snapshot.state_hash);
                 w.clock(&snapshot.clock);
                 w.clock(&snapshot.compacted);
@@ -101,8 +106,9 @@ impl Codec for BinaryCodec {
             TAG_ACK => Message::Ack(r.clock()?),
             TAG_PING => Message::Ping(r.varint()?),
             TAG_PONG => Message::Pong(r.varint()?),
-            TAG_SNAPSHOT => {
-                let state = r.bytes(MAX_FRAME)?;
+            TAG_SNAPSHOT_CHUNK => Message::SnapshotChunk(r.bytes(MAX_FRAME)?),
+            TAG_SNAPSHOT_BEGIN => {
+                let state_len = usize::try_from(r.varint()?).map_err(|_| CodecError::TooLarge)?;
                 let state_hash = r.varint()?;
                 let clock = r.clock()?;
                 let compacted = r.clock()?;
@@ -111,8 +117,8 @@ impl Codec for BinaryCodec {
                     1 => Some(r.timestamp()?),
                     other => return Err(CodecError::InvalidTag(other)),
                 };
-                Message::Snapshot(Box::new(SnapshotMsg {
-                    state,
+                Message::SnapshotBegin(Box::new(SnapshotHeader {
+                    state_len,
                     state_hash,
                     clock,
                     compacted,

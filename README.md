@@ -97,7 +97,7 @@ Run any of them with `cargo run --example <name>`. Examples marked `std` also ne
 
 - **Signatures are a stand-in.** `stubs::crypto` uses a keyed 64-bit hash. It detects accidental and simple tampering and does not resist forgery. Replace it with `tpt-crypto` before deploying across untrusted networks.
 - **Snapshots are trusted from peers.** A snapshot replaces the receiver's state. Its hash is checked, but its contents are not validated against the operation policy. Only snapshot from peers you trust.
-- **Snapshot size.** A snapshot is one frame, so the encoded state must fit within the frame limit (16 MiB). Larger states need chunked snapshots, which are not implemented.
+- **Snapshot size.** A snapshot streams its encoded state in chunks, and a receiver refuses any state over 256 MiB (`engine::MAX_SNAPSHOT_BYTES`). A peer that cannot receive the whole state in one session can be interrupted, and the next handshake starts it again from the beginning.
 - **Relay is by anti-entropy.** Operations received from one peer are not forwarded live to others. They reach other peers at the next resync, which is every `resync_interval_ms`.
 - **Idle peers pin compaction.** The horizon moves only as fast as the least recently active actor. Compaction is delayed, not unsafe, while an idle peer stays idle.
 - **Stubs.** The `stubs` module stands in for `tpt-operations`, `tpt-primitives`, `tpt-uir`, `tpt-version` and `tpt-webrtc`. Their trait shapes are chosen to be replaceable, but the real APIs are unconfirmed.

@@ -36,7 +36,7 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - `Replica::export_log` and `Replica::restore` (with `LogImage`), so a replica can resume its sequence numbers and clock. The state is persisted separately.
 - `Replica::remove_peer`, `Transport::is_delay_tolerant`, and `Event::ClockFoldFailed`.
 - `FrameError::UnexpectedPong`: a `Pong` must answer a ping this replica sent.
-- Snapshot transfer. A peer behind the compaction floor receives the sender's encoded state (`State::encode_state` / `decode_state`, now required methods). The receiver checks the state hash, keeps its own operations that the snapshot does not cover, and takes the retained operations from the delta that follows. Events: `PeerNeedsSnapshot`, `SnapshotInstalled`.
+- Snapshot transfer, chunked over several frames. A peer behind the compaction floor receives the sender's encoded state (`State::encode_state` / `decode_state`, now required methods). The receiver checks the state hash, keeps its own operations that the snapshot does not cover, and takes the retained operations from the delta that follows. Events: `PeerNeedsSnapshot`, `SnapshotInstalled`.
 - `TcpAcceptor` (accepts connections without blocking) and `ReconnectingTcp` (dials with exponential backoff from 100 ms to 30 s, driven by the engine's polling).
 - `Replica::builder(actor, state)` and `ReplicaBuilder`. `BuildError` reports a missing clock or keys, so no key is chosen silently.
 - `prelude` module, `Replica::stats()` (`ReplicaStats`), and `LwwMap::iter()`.
@@ -54,5 +54,4 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - Real `tpt-*` crate integration (blocked on their APIs).
 - Crates.io publication (waiting on the first release).
-- Chunked snapshots for states larger than one frame.
 - Deterministic network simulator, range-digest anti-entropy, replay protection, an event sink, and the `cargo-generate` template.

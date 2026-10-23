@@ -53,7 +53,8 @@ When `B` is behind A's compaction floor, A sends a `Snapshot` in place of the de
 ```
   A                                            B (behind compaction)
      |<------- Hello(clock_B) --------------------|  B's clock is below A's compaction floor
-     |-------- Snapshot(state, hash, clocks) ---->|  B verifies the hash, installs the state
+     |-------- SnapshotBegin(len, hash, clocks) ->|  B reserves space for the state
+     |-------- SnapshotChunk(bytes) x N ---------->|  B verifies the hash once all bytes arrive, installs the state
      |-------- Delta(retained ops after compacted)->|
      |<------- Ack(clock_B) ----------------------|
 ```
