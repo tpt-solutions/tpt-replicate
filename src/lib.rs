@@ -23,8 +23,11 @@ extern crate alloc;
 extern crate std;
 
 pub mod builder;
+pub mod checkpoint;
 pub mod clock;
 pub mod codec;
+#[cfg(feature = "crdt")]
+pub mod crdt;
 pub mod engine;
 pub mod error;
 pub mod gc;
@@ -37,6 +40,9 @@ pub mod sync;
 pub mod transport;
 
 pub use builder::{BuildError, ReplicaBuilder};
+#[cfg(feature = "std")]
+pub use checkpoint::FileStore;
+pub use checkpoint::{CheckpointStore, MemoryStore};
 
 // The README's code blocks are compiled as doctests, so the quick start cannot go stale.
 #[cfg(doctest)]

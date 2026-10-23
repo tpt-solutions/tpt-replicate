@@ -45,8 +45,13 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.70, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
 - Dual license: MIT OR Apache-2.0.
 
+- Checkpoints: `Replica::checkpoint()` encodes the state and log into one blob, and `Replica::recover()` rebuilds a replica from it. Damaged input returns `RecoverError`, never a panic. `CheckpointStore` with `MemoryStore` and, under `std`, `FileStore` (atomic save: temporary file, sync, rename).
+- `crdt` feature: `PnCounter` (up and down counter) and `OrSet` (add-wins set). Both tolerate repeated delivery, which snapshot installation can cause.
+- `deny.toml` for `cargo deny`, run weekly by the scheduled workflow.
+
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).
 - Crates.io publication (waiting on the first release).
 - Chunked snapshots for states larger than one frame.
+- Deterministic network simulator, range-digest anti-entropy, replay protection, an event sink, and the `cargo-generate` template.

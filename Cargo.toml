@@ -19,6 +19,8 @@ default = []
 std = []
 # Enables the WebRTC data-channel adapter against the stubbed tpt-webrtc trait.
 webrtc = []
+# Enables PnCounter and OrSet in the `crdt` module.
+crdt = []
 
 [dependencies]
 

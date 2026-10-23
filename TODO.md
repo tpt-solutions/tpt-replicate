@@ -115,12 +115,12 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] App-level op validation hook — `OpPolicy::check` returns `ApplyError::Invalid(reason)`; refusals are quarantined like state refusals
 
 ### C. Innovation (optional)
-- [ ] `crdt` feature: OR-Set, PN-Counter, RGA list/text, MV-Register (not started)
+- [x] `crdt` feature: `PnCounter` and `OrSet` (done). **Not done:** RGA list/text, MV-Register
 - [ ] Deterministic network simulator (`sim`): seeded partitions, latency, loss (not started; `MemoryTransport` has loss, duplication and reordering)
 - [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
 - [ ] `Replica::stats()` (done) plus an event/tracing sink (not done)
-- [ ] Persistence trait with file and in-memory impls (not started)
-- [ ] Replay protection (session nonce in `Envelope`) (not started)
+- [x] Persistence: `Replica::checkpoint` / `recover` with `CheckpointStore`; `MemoryStore` and `FileStore` (atomic save)
+- [ ] Replay protection (session nonce in `Envelope`): deferred. Operations are idempotent, so a replayed frame costs bandwidth but cannot change state; the wire change is not justified without a threat model
 
 ### D. Usability and adoption
 - [x] `prelude` module and `Replica::builder()` with defaults; ~10-line quickstart
@@ -135,7 +135,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] Commit the untracked source tree (commit `ca3e882` on branch `phase-5-review-fixes`)
 - [x] `.github/workflows/ci.yml`: OS matrix, stable + MSRV 1.70, thumbv7em, fmt, clippy, doc, run examples
 - [x] `scripts/ci.sh` twin of `scripts/ci.ps1` (with `rustup target add`)
-- [ ] Scheduled workflow: heavy proptest, `cargo audit`, coverage (done). **Not done:** `cargo deny`, `cargo-semver-checks` (needs a published baseline)
+- [ ] Scheduled workflow: heavy proptest, `cargo audit`, coverage, `cargo deny` (done). **Not done:** `cargo-semver-checks` (needs a published baseline). `cargo deny` was not run locally
 - [x] Dependabot, release workflow (dry run on tags; no automatic publish), `[package.metadata.docs.rs]`
 - [x] Criterion benches (merge, delta, codec)
 - [x] `CONTRIBUTING.md`, `SECURITY.md`, issue / PR templates
