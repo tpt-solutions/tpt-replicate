@@ -522,3 +522,113 @@ impl State for Rga {
         Ok(Self { elements })
     }
 }
+
+const TAG_WRITE: u8 = 0;
+
+/// A register that keeps every value written concurrently (MV-register).
+///
+/// A write names the values its author had seen, and replaces exactly those. So a write that
+/// follows another replaces it, while two concurrent writes both survive. Readers see every
+/// surviving value, and can resolve the conflict by writing again, which replaces them all.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MvRegister {
+    /// Each surviving write, keyed by its timestamp.
+    values: BTreeMap<Timestamp, Vec<u8>>,
+}
+
+impl MvRegister {
+    /// An operation that writes `value`, replacing every value currently in `state`.
+    pub fn write(value: &[u8], state: &Self) -> UirNode {
+        let mut bytes = alloc::vec![TAG_WRITE];
+        bytes.extend_from_slice(&(state.values.len() as u32).to_be_bytes());
+        for tag in state.values.keys() {
+            put_timestamp(&mut bytes, tag);
+        }
+        bytes.extend_from_slice(value);
+        UirNode { bytes }
+    }
+
+    /// Every surviving value, in timestamp order. One value means no conflict.
+    pub fn values(&self) -> impl Iterator<Item = &[u8]> {
+        self.values.values().map(Vec::as_slice)
+    }
+
+    /// The value, if exactly one survives.
+    pub fn get(&self) -> Option<&[u8]> {
+        match self.values.len() {
+            1 => self.values.values().next().map(Vec::as_slice),
+            _ => None,
+        }
+    }
+}
+
+impl CrdtCompatible for MvRegister {
+    fn apply(&mut self, stamp: &Timestamp, op: &UirNode) -> Result<(), ApplyError> {
+        let (tag, body) = op.bytes.split_first().ok_or(ApplyError::MalformedOp)?;
+        if *tag != TAG_WRITE {
+            return Err(ApplyError::UnknownOpTag(*tag));
+        }
+        let (count, mut rest) = take_u32(body).ok_or(ApplyError::MalformedOp)?;
+        let mut observed = Vec::new();
+        for _ in 0..count {
+            let (id, after) = take_timestamp(rest).ok_or(ApplyError::MalformedOp)?;
+            observed.push(id);
+            rest = after;
+        }
+        for id in &observed {
+            self.values.remove(id);
+        }
+        self.values.insert(*stamp, rest.to_vec());
+        Ok(())
+    }
+}
+
+impl State for MvRegister {
+    fn state_hash(&self) -> u64 {
+        let mut hash = FNV_OFFSET;
+        for (tag, value) in &self.values {
+            let mut buf = Vec::with_capacity(20);
+            put_timestamp(&mut buf, tag);
+            fnv(&mut hash, &buf);
+            fnv(&mut hash, &(value.len() as u64).to_be_bytes());
+            fnv(&mut hash, value);
+        }
+        hash
+    }
+
+    /// Nothing to drop: a surviving value is a live value.
+    fn compact(&mut self, _cutoff: &Timestamp) {}
+
+    fn encode_state(&self) -> Vec<u8> {
+        let mut out = (self.values.len() as u32).to_be_bytes().to_vec();
+        for (tag, value) in &self.values {
+            put_timestamp(&mut out, tag);
+            out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            out.extend_from_slice(value);
+        }
+        out
+    }
+
+    fn decode_state(bytes: &[u8]) -> Result<Self, SnapshotError> {
+        let malformed = SnapshotError::Malformed;
+        let (count, mut rest) = take_u32(bytes).ok_or(malformed.clone())?;
+        let mut values = BTreeMap::new();
+        for _ in 0..count {
+            let (tag, after) = take_timestamp(rest).ok_or(malformed.clone())?;
+            let (len, after) = take_u32(after).ok_or(malformed.clone())?;
+            let len = len as usize;
+            if after.len() < len {
+                return Err(malformed);
+            }
+            let (value, after) = after.split_at(len);
+            if values.insert(tag, value.to_vec()).is_some() {
+                return Err(malformed);
+            }
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return Err(malformed);
+        }
+        Ok(Self { values })
+    }
+}
