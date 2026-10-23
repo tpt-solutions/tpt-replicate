@@ -28,6 +28,8 @@ pub mod clock;
 pub mod codec;
 #[cfg(feature = "crdt")]
 pub mod crdt;
+#[cfg(feature = "ed25519")]
+pub mod ed25519;
 pub mod engine;
 pub mod error;
 pub mod gc;
@@ -39,6 +41,10 @@ pub mod sim;
 pub mod stubs;
 pub mod sync;
 pub mod transport;
+#[cfg(feature = "version")]
+pub mod version;
+#[cfg(feature = "webrtc-app")]
+pub mod webrtc_app;
 
 pub use builder::{BuildError, ReplicaBuilder};
 #[cfg(feature = "std")]

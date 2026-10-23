@@ -16,13 +16,13 @@ Until the crate is published, depend on it from git:
 
 ```toml
 [dependencies]
-tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate" }
+tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate" }
 ```
 
 Enable the `std` feature for `SystemClock`, file and TCP transports:
 
 ```toml
-tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate", features = ["std"] }
+tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate", features = ["std"] }
 ```
 
 ## Features
@@ -32,6 +32,10 @@ tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate", features 
 | *(none)* | The `no_std` core: clocks, log, merge, sync, peers, engine, in-memory transport, in-memory snapshot sink. |
 | `std`    | `SystemClock`, `FileTransport` (delay-tolerant link through a directory), `TcpTransport`, `TcpAcceptor`, `ReconnectingTcp`. |
 | `webrtc` | `WebRtcTransport`, an adapter from a message-oriented data channel to `Transport`. |
+| `webrtc-app` | `webrtc_app::WebRtcLink`, a `Transport` over a real tpt-webrtc data channel (adds tokio and the tpt-webrtc stack). |
+| `ed25519` | `ed25519::Ed25519Signer` and `Ed25519Directory`, real signatures from tpt-crypto. |
+| `version` | `version::VersionSink`, snapshots committed to a tpt-version repository. |
+| `crdt` | `PnCounter`, `OrSet`, `Rga` and `MvRegister`. |
 
 ## Quick start
 

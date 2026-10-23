@@ -42,7 +42,7 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - `prelude` module, `Replica::stats()` (`ReplicaStats`), and `LwwMap::iter()`.
 - Examples: `quickstart`, `tcp_chat`, `custom_crdt`, `custom_signer`, `three_peer_partition`.
 - Documentation: `docs/guide.md`, `CONTRIBUTING.md`, `SECURITY.md`, issue and pull-request templates. The README quick start is compiled as a doctest.
-- Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.70, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
+- Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.85, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
 - Dual license: MIT OR Apache-2.0.
 
 - Checkpoints: `Replica::checkpoint()` encodes the state and log into one blob, and `Replica::recover()` rebuilds a replica from it. Damaged input returns `RecoverError`, never a panic. `CheckpointStore` with `MemoryStore` and, under `std`, `FileStore` (atomic save: temporary file, sync, rename).
@@ -59,6 +59,10 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - `crdt::Rga`: a replicated sequence (RGA). Concurrent inserts at one position are ordered by timestamp, and deletes leave tombstones. Tested under shuffled delivery and with two concurrent authors.
 
 - `crdt::MvRegister`: keeps concurrent writes side by side, and a write that has seen them replaces them.
+
+- `version` feature: `VersionSink` commits each snapshot to a tpt-version repository, as one commit holding the cutoff, state hash and encoded state. `latest()` reads it back for restart. `SnapshotSink::persist` now receives the encoded state, which it needs to store anything useful. Needs Rust 1.85 (edition 2024) and GitHub access.
+
+- `webrtc-app` feature: `webrtc_app::WebRtcLink`, a `Transport` over a real tpt-webrtc data channel. Negotiates two peers over loopback in tests. Needs tokio and the tpt-webrtc stack.
 
 ### Not yet
 
