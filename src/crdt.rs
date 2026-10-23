@@ -8,6 +8,8 @@
 //!   in order, so the state keeps the author's last applied timestamp and skips anything not newer.
 //! - [`OrSet`]: a set where an add beats a concurrent remove. Each add is tagged with its
 //!   timestamp. A remove carries the tags it saw, so it removes only those.
+//! - [`Rga`]: a text or list sequence. Each element is named by its insert's timestamp, and
+//!   concurrent inserts at one position are ordered by timestamp. Deletes leave tombstones.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -313,5 +315,210 @@ impl OrSet {
         self.tags_of(element)
             .map(|tags| tags.iter().copied().collect())
             .unwrap_or_default()
+    }
+}
+
+const TAG_INSERT: u8 = 0;
+const TAG_DELETE: u8 = 1;
+
+/// One element of an [`Rga`] sequence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Element {
+    /// The timestamp of the insert that created the element. It names the element everywhere.
+    id: Timestamp,
+    value: Vec<u8>,
+    /// Deleted elements stay as tombstones. A concurrent insert may still refer to them.
+    deleted: bool,
+}
+
+/// A replicated sequence of byte-string elements (RGA).
+///
+/// Each element is identified by the timestamp of its insert. An insert names the element it goes
+/// after. Concurrent inserts after the same element are ordered by timestamp, newest first, so every
+/// replica places them the same way. A delete marks a tombstone.
+///
+/// Tombstones are never removed. A concurrent insert may name a deleted element, so compaction
+/// cannot tell which tombstones are still needed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rga {
+    elements: Vec<Element>,
+}
+
+impl Rga {
+    /// An operation that inserts `value` after the element `after`, or at the head if `None`.
+    pub fn insert(after: Option<Timestamp>, value: &[u8]) -> UirNode {
+        let mut bytes = alloc::vec![TAG_INSERT];
+        match after {
+            Some(id) => {
+                bytes.push(1);
+                put_timestamp(&mut bytes, &id);
+            }
+            None => bytes.push(0),
+        }
+        bytes.extend_from_slice(value);
+        UirNode { bytes }
+    }
+
+    /// An operation that deletes the element `target`.
+    pub fn delete(target: Timestamp) -> UirNode {
+        let mut bytes = alloc::vec![TAG_DELETE];
+        put_timestamp(&mut bytes, &target);
+        UirNode { bytes }
+    }
+
+    /// The live elements in order, with their ids.
+    pub fn iter(&self) -> impl Iterator<Item = (Timestamp, &[u8])> {
+        self.elements
+            .iter()
+            .filter(|e| !e.deleted)
+            .map(|e| (e.id, e.value.as_slice()))
+    }
+
+    /// Number of live elements.
+    pub fn len(&self) -> usize {
+        self.elements.iter().filter(|e| !e.deleted).count()
+    }
+
+    /// Whether there are no live elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The id of the live element at `index`.
+    pub fn id_at(&self, index: usize) -> Option<Timestamp> {
+        self.iter().nth(index).map(|(id, _)| id)
+    }
+
+    /// The id to insert after, to place a new element at `index`. `None` means the head.
+    pub fn after_index(&self, index: usize) -> Option<Timestamp> {
+        if index == 0 {
+            None
+        } else {
+            self.id_at(index - 1)
+        }
+    }
+
+    /// Position in `elements` of the element with `id`, deleted or not.
+    fn position(&self, id: &Timestamp) -> Option<usize> {
+        self.elements.iter().position(|e| e.id == *id)
+    }
+}
+
+impl CrdtCompatible for Rga {
+    fn apply(&mut self, stamp: &Timestamp, op: &UirNode) -> Result<(), ApplyError> {
+        let (tag, body) = op.bytes.split_first().ok_or(ApplyError::MalformedOp)?;
+        match *tag {
+            TAG_INSERT => {
+                let (flag, rest) = body.split_first().ok_or(ApplyError::MalformedOp)?;
+                let (after, value) = match *flag {
+                    0 => (None, rest),
+                    1 => {
+                        let (id, rest) = take_timestamp(rest).ok_or(ApplyError::MalformedOp)?;
+                        (Some(id), rest)
+                    }
+                    _ => return Err(ApplyError::MalformedOp),
+                };
+                // Applying the same insert twice changes nothing.
+                if self.position(stamp).is_some() {
+                    return Ok(());
+                }
+                // Start just after the element named, or at the head.
+                let start = match after {
+                    None => 0,
+                    Some(id) => {
+                        self.position(&id)
+                            .ok_or(ApplyError::Invalid("unknown reference"))?
+                            + 1
+                    }
+                };
+                // Skip past elements that are newer than this one, so that concurrent inserts
+                // come out in the same order everywhere.
+                let mut at = start;
+                while at < self.elements.len() && self.elements[at].id > *stamp {
+                    at += 1;
+                }
+                self.elements.insert(
+                    at,
+                    Element {
+                        id: *stamp,
+                        value: value.to_vec(),
+                        deleted: false,
+                    },
+                );
+                Ok(())
+            }
+            TAG_DELETE => {
+                let (target, rest) = take_timestamp(body).ok_or(ApplyError::MalformedOp)?;
+                if !rest.is_empty() {
+                    return Err(ApplyError::MalformedOp);
+                }
+                let index = self
+                    .position(&target)
+                    .ok_or(ApplyError::Invalid("unknown element"))?;
+                self.elements[index].deleted = true;
+                Ok(())
+            }
+            other => Err(ApplyError::UnknownOpTag(other)),
+        }
+    }
+}
+
+impl State for Rga {
+    /// Hashes the live elements in order. Tombstones are not observable.
+    fn state_hash(&self) -> u64 {
+        let mut hash = FNV_OFFSET;
+        for (_, value) in self.iter() {
+            fnv(&mut hash, &(value.len() as u64).to_be_bytes());
+            fnv(&mut hash, value);
+        }
+        hash
+    }
+
+    /// Tombstones stay, because a concurrent insert may still name one. See [`Rga`].
+    fn compact(&mut self, _cutoff: &Timestamp) {}
+
+    fn encode_state(&self) -> Vec<u8> {
+        let mut out = (self.elements.len() as u32).to_be_bytes().to_vec();
+        for element in &self.elements {
+            put_timestamp(&mut out, &element.id);
+            out.push(u8::from(element.deleted));
+            out.extend_from_slice(&(element.value.len() as u32).to_be_bytes());
+            out.extend_from_slice(&element.value);
+        }
+        out
+    }
+
+    fn decode_state(bytes: &[u8]) -> Result<Self, SnapshotError> {
+        let malformed = SnapshotError::Malformed;
+        let (count, mut rest) = take_u32(bytes).ok_or(malformed.clone())?;
+        let mut elements: Vec<Element> = Vec::new();
+        for _ in 0..count {
+            let (id, after) = take_timestamp(rest).ok_or(malformed.clone())?;
+            let (&flag, after) = after.split_first().ok_or(malformed.clone())?;
+            let deleted = match flag {
+                0 => false,
+                1 => true,
+                _ => return Err(malformed),
+            };
+            let (len, after) = take_u32(after).ok_or(malformed.clone())?;
+            let len = len as usize;
+            if after.len() < len {
+                return Err(malformed);
+            }
+            let (value, after) = after.split_at(len);
+            if elements.iter().any(|e| e.id == id) {
+                return Err(malformed);
+            }
+            elements.push(Element {
+                id,
+                value: value.to_vec(),
+                deleted,
+            });
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return Err(malformed);
+        }
+        Ok(Self { elements })
     }
 }
