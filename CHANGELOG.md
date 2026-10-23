@@ -60,6 +60,8 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - `crdt::MvRegister`: keeps concurrent writes side by side, and a write that has seen them replaces them.
 
+- `version` feature: `VersionSink` commits each snapshot to a tpt-version repository, as one commit holding the cutoff, state hash and encoded state. `latest()` reads it back for restart. `SnapshotSink::persist` now receives the encoded state, which it needs to store anything useful. Needs Rust 1.85 (edition 2024) and GitHub access.
+
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).

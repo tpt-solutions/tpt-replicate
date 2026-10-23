@@ -72,8 +72,9 @@ pub struct Snapshot {
 
 /// Persists snapshots before the log compacts. Compaction only runs after `persist` succeeds.
 pub trait SnapshotSink {
-    /// Stores a snapshot durably.
-    fn persist(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError>;
+    /// Stores a snapshot durably. `state` is the encoded state at the snapshot point, from
+    /// [`State::encode_state`]. A restart or a late joiner needs it.
+    fn persist(&mut self, snapshot: &Snapshot, state: &[u8]) -> Result<(), SnapshotError>;
 }
 
 /// In-memory [`SnapshotSink`] for tests and examples.
@@ -84,7 +85,7 @@ pub struct MemorySnapshotSink {
 }
 
 impl SnapshotSink for MemorySnapshotSink {
-    fn persist(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
+    fn persist(&mut self, snapshot: &Snapshot, _state: &[u8]) -> Result<(), SnapshotError> {
         self.snapshots.push(snapshot.clone());
         Ok(())
     }

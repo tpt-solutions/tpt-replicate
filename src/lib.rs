@@ -41,6 +41,8 @@ pub mod sim;
 pub mod stubs;
 pub mod sync;
 pub mod transport;
+#[cfg(feature = "version")]
+pub mod version;
 
 pub use builder::{BuildError, ReplicaBuilder};
 #[cfg(feature = "std")]
