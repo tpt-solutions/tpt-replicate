@@ -6,8 +6,12 @@
 //! operation the state itself refuses is different. It is quarantined: logged so its author's
 //! sequence numbers keep advancing, skipped by the state, and reported in [`MergeReport::rejected`].
 //! Every replica makes the same decision for the same operation, so they stay in agreement.
+//!
+//! Waiting operations are indexed by the single cause they are blocked on, so an applied operation
+//! wakes exactly the operations that were waiting for it. Draining a backlog costs
+//! `O(log n)` per operation, not a rescan of the whole buffer.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use crate::clock::{Timestamp, VectorClock, DEFAULT_MAX_DRIFT_MS};
@@ -108,10 +112,25 @@ impl OpPolicy for AllowAll {
 /// keep entries distinct even if a hostile author reuses a timestamp.
 type PendingKey = (Timestamp, ActorId, u64);
 
+/// A cause an operation is waiting for: `actor`'s clock must reach `seq`.
+type Gate = (ActorId, u64);
+
+/// Where a pending operation sits in the index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wait {
+    /// Inserted this batch and not yet checked against the clock.
+    Fresh,
+    /// Every cause is applied. It sits in `Pending::ready`.
+    Ready,
+    /// Blocked on one cause. It sits in `Pending::gates` under that cause.
+    On(Gate),
+}
+
 #[derive(Clone, Debug)]
 struct Held {
     op: StampedOperation,
     arrived_ms: u64,
+    wait: Wait,
 }
 
 /// Causally incomplete operations, indexed by apply order and by `(actor, seq)` for deduplication.
@@ -122,6 +141,26 @@ struct Pending {
     by_slot: BTreeMap<(ActorId, u64), PendingKey>,
     per_actor: BTreeMap<ActorId, usize>,
     bytes: usize,
+    /// Operations with no unmet causes, in apply order.
+    ready: BTreeSet<PendingKey>,
+    /// Operations blocked on one cause each, keyed by that cause.
+    gates: BTreeMap<Gate, Vec<PendingKey>>,
+    /// Inserted this batch, waiting for [`Pending::classify_fresh`].
+    fresh: Vec<PendingKey>,
+}
+
+/// The first cause `op` is still missing, or `None` if it is ready. Its own predecessor comes
+/// before its explicit dependencies.
+fn first_unmet(op: &StampedOperation, clock: &VectorClock) -> Option<Gate> {
+    let have = clock.get(op.actor);
+    if have.saturating_add(1) < op.seq {
+        return Some((op.actor, op.seq - 1));
+    }
+    op.deps
+        .peers
+        .iter()
+        .find(|(actor, seq)| clock.get(**actor) < **seq)
+        .map(|(actor, seq)| (*actor, *seq))
 }
 
 impl Pending {
@@ -141,17 +180,34 @@ impl Pending {
         self.by_slot.insert((op.actor, op.seq), key);
         *self.per_actor.entry(op.actor).or_insert(0) += 1;
         self.bytes += op.op.bytes.len();
+        self.fresh.push(key);
         self.by_key.insert(
             key,
             Held {
                 op,
                 arrived_ms: now_ms,
+                wait: Wait::Fresh,
             },
         );
     }
 
     fn remove(&mut self, key: &PendingKey) -> Option<StampedOperation> {
-        let op = self.by_key.remove(key)?.op;
+        let held = self.by_key.remove(key)?;
+        match held.wait {
+            Wait::Fresh => self.fresh.retain(|k| k != key),
+            Wait::Ready => {
+                self.ready.remove(key);
+            }
+            Wait::On(gate) => {
+                if let Some(waiting) = self.gates.get_mut(&gate) {
+                    waiting.retain(|k| k != key);
+                    if waiting.is_empty() {
+                        self.gates.remove(&gate);
+                    }
+                }
+            }
+        }
+        let op = held.op;
         self.by_slot.remove(&(op.actor, op.seq));
         if let Some(count) = self.per_actor.get_mut(&op.actor) {
             *count -= 1;
@@ -163,13 +219,64 @@ impl Pending {
         Some(op)
     }
 
-    /// Keys of every operation whose causes are all applied, in apply order.
-    fn ready_keys(&self, clock: &VectorClock) -> Vec<PendingKey> {
-        self.by_key
-            .iter()
-            .filter(|(_, held)| is_ready(&held.op, clock))
-            .map(|(key, _)| *key)
-            .collect()
+    /// Files `key` under its first unmet cause, or in the ready set if it has none.
+    fn classify(&mut self, key: PendingKey, clock: &VectorClock) {
+        let Some(held) = self.by_key.get_mut(&key) else {
+            return;
+        };
+        let wait = match first_unmet(&held.op, clock) {
+            None => {
+                self.ready.insert(key);
+                Wait::Ready
+            }
+            Some(gate) => {
+                self.gates.entry(gate).or_default().push(key);
+                Wait::On(gate)
+            }
+        };
+        held.wait = wait;
+    }
+
+    /// Puts every waiting operation back in the fresh list. Needed when the clock moved without
+    /// going through this merger, which a snapshot install does.
+    fn reclassify_all(&mut self) {
+        let mut keys: Vec<PendingKey> = core::mem::take(&mut self.ready).into_iter().collect();
+        for (_, waiting) in core::mem::take(&mut self.gates) {
+            keys.extend(waiting);
+        }
+        for key in &keys {
+            if let Some(held) = self.by_key.get_mut(key) {
+                held.wait = Wait::Fresh;
+            }
+        }
+        self.fresh.extend(keys);
+    }
+
+    /// Checks every operation inserted since the last call against the clock.
+    fn classify_fresh(&mut self, clock: &VectorClock) {
+        for key in core::mem::take(&mut self.fresh) {
+            self.classify(key, clock);
+        }
+    }
+
+    /// Re-checks every operation waiting on a cause that `actor`'s clock has now reached.
+    fn release(&mut self, actor: ActorId, clock: &VectorClock) {
+        let upto = clock.get(actor);
+        let due: Vec<Gate> = self
+            .gates
+            .range((actor, 0)..=(actor, upto))
+            .map(|(gate, _)| *gate)
+            .collect();
+        for gate in due {
+            for key in self.gates.remove(&gate).unwrap_or_default() {
+                self.classify(key, clock);
+            }
+        }
+    }
+
+    /// Removes and returns the earliest ready operation.
+    fn pop_ready(&mut self) -> Option<PendingKey> {
+        self.ready.pop_first()
     }
 
     /// Drops operations that arrived before `cutoff_ms`.
@@ -208,23 +315,14 @@ impl Pending {
     }
 }
 
-/// An operation is ready when it is the next in its author's sequence and every operation it
-/// depends on has been applied.
-fn is_ready(op: &StampedOperation, clock: &VectorClock) -> bool {
-    clock.get(op.actor).checked_add(1) == Some(op.seq)
-        && op
-            .deps
-            .peers
-            .iter()
-            .all(|(actor, seq)| clock.get(*actor) >= *seq)
-}
-
 /// Executes remote batches against a replica's state and log.
 #[derive(Clone, Debug, Default)]
 pub struct Merger {
     limits: MergeLimits,
     pending: Pending,
     floor: Option<Timestamp>,
+    /// The log clock the pending index was last filed against.
+    synced: Option<VectorClock>,
 }
 
 impl Merger {
@@ -282,6 +380,11 @@ impl Merger {
         let mut clock = log.clock().clone();
         let mut report = MergeReport::default();
 
+        // Waiting operations were filed against the clock as it stood after the last batch. If
+        // the log's clock has moved since (a snapshot install does this), file them again.
+        if self.synced.as_ref() != Some(&clock) {
+            pending.reclassify_all();
+        }
         pending.expire(now_ms.saturating_sub(self.limits.max_pending_age_ms));
         for op in incoming {
             if op.seq <= clock.get(op.actor) {
@@ -300,41 +403,42 @@ impl Merger {
             }
             pending.insert(op, now_ms);
         }
+        pending.classify_fresh(&clock);
 
         // The state is cloned only when something will be applied, so duplicate-only batches are
-        // cheap. Each pass applies every operation that is ready at its start. Operations that
-        // become ready during a pass are picked up by the next one.
+        // cheap. Operations are applied in timestamp order among those that are ready. Applying
+        // one may make others ready, and they join the ready set as their causes are released.
         let mut staged: Option<S> = None;
         let mut ready = Vec::new();
-        loop {
-            let keys = pending.ready_keys(&clock);
-            if keys.is_empty() {
-                break;
+        while let Some(key) = pending.pop_ready() {
+            let Some(op) = pending.remove(&key) else {
+                continue;
+            };
+            // Only the next operation in an author's sequence may be applied. A stale entry is
+            // dropped without being applied.
+            if clock.get(op.actor).checked_add(1) != Some(op.seq) {
+                continue;
             }
-            for key in keys {
-                let Some(op) = pending.remove(&key) else {
-                    continue;
-                };
-                clock.observe(op.actor, op.seq);
-                match self.floor {
-                    Some(floor) if op.timestamp <= floor => report.stale += 1,
-                    _ => {
-                        let outcome = policy.check(op.actor, &op.op).and_then(|()| {
-                            let target = staged.get_or_insert_with(|| state.clone());
-                            target.apply(&op.timestamp, &op.op)
-                        });
-                        match outcome {
-                            Ok(()) => report.applied += 1,
-                            Err(error) => report.rejected.push(Rejection {
-                                actor: op.actor,
-                                seq: op.seq,
-                                error,
-                            }),
-                        }
+            clock.observe(op.actor, op.seq);
+            pending.release(op.actor, &clock);
+            match self.floor {
+                Some(floor) if op.timestamp <= floor => report.stale += 1,
+                _ => {
+                    let outcome = policy.check(op.actor, &op.op).and_then(|()| {
+                        let target = staged.get_or_insert_with(|| state.clone());
+                        target.apply(&op.timestamp, &op.op)
+                    });
+                    match outcome {
+                        Ok(()) => report.applied += 1,
+                        Err(error) => report.rejected.push(Rejection {
+                            actor: op.actor,
+                            seq: op.seq,
+                            error,
+                        }),
                     }
                 }
-                ready.push(op);
             }
+            ready.push(op);
         }
 
         pending.check_quotas(&self.limits)?;
@@ -346,6 +450,7 @@ impl Merger {
             *state = staged;
         }
         self.pending = pending;
+        self.synced = Some(clock);
         Ok(report)
     }
 

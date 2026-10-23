@@ -36,6 +36,17 @@ fn bench_merge(c: &mut Criterion) {
             BatchSize::SmallInput,
         );
     });
+    let reversed: Vec<_> = ops.iter().rev().cloned().collect();
+    group.bench_function(
+        "import 1000 reversed ops (every op waits on its predecessor)",
+        |b| {
+            b.iter_batched(
+                || (replica(2, &clock), reversed.clone()),
+                |(mut target, batch)| target.import_ops(batch).expect("merge"),
+                BatchSize::SmallInput,
+            );
+        },
+    );
     group.bench_function("import 1000 duplicate ops", |b| {
         let mut target = replica(2, &clock);
         target.import_ops(ops.clone()).expect("merge");
