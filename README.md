@@ -16,13 +16,13 @@ Until the crate is published, depend on it from git:
 
 ```toml
 [dependencies]
-tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate" }
+tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate" }
 ```
 
 Enable the `std` feature for `SystemClock`, file and TCP transports:
 
 ```toml
-tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate", features = ["std"] }
+tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate", features = ["std"] }
 ```
 
 ## Features

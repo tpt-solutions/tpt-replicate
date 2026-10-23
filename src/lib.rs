@@ -28,6 +28,8 @@ pub mod clock;
 pub mod codec;
 #[cfg(feature = "crdt")]
 pub mod crdt;
+#[cfg(feature = "ed25519")]
+pub mod ed25519;
 pub mod engine;
 pub mod error;
 pub mod gc;
