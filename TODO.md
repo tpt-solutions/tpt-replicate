@@ -117,7 +117,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 ### C. Innovation (optional)
 - [x] `crdt` feature: `PnCounter`, `OrSet`, `Rga` (sequence) and `MvRegister` (done)
 - [x] Deterministic network simulator (`sim`): seeded writes, partitions, late joiners, loss, duplication and reordering. Latency is not modelled; the random poll order stands in for it
-- [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
+- [ ] Anti-entropy efficiency: range digests or compressed vector clocks. **Assessed, deferred:** the handshake exchanges vector clocks, which grow with the number of authors, not with the number of operations, and it already sends only what the peer lacks. Measure the clock cost on a many-author workload before changing the wire format.
 - [x] `Replica::stats()` and an event sink (`with_event_observer`). Tracing spans are not wired in
 - [x] Persistence: `Replica::checkpoint` / `recover` with `CheckpointStore`; `MemoryStore` and `FileStore` (atomic save)
 - [ ] Replay protection (session nonce in `Envelope`): deferred. Operations are idempotent, so a replayed frame costs bandwidth but cannot change state; the wire change is not justified without a threat model
