@@ -42,7 +42,7 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - `prelude` module, `Replica::stats()` (`ReplicaStats`), and `LwwMap::iter()`.
 - Examples: `quickstart`, `tcp_chat`, `custom_crdt`, `custom_signer`, `three_peer_partition`.
 - Documentation: `docs/guide.md`, `CONTRIBUTING.md`, `SECURITY.md`, issue and pull-request templates. The README quick start is compiled as a doctest.
-- Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.70, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
+- Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.85, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
 - Dual license: MIT OR Apache-2.0.
 
 - Checkpoints: `Replica::checkpoint()` encodes the state and log into one blob, and `Replica::recover()` rebuilds a replica from it. Damaged input returns `RecoverError`, never a panic. `CheckpointStore` with `MemoryStore` and, under `std`, `FileStore` (atomic save: temporary file, sync, rename).

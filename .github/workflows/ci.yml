@@ -48,14 +48,16 @@ jobs:
           cargo run --example rover_dtn --features std
 
   msrv:
-    name: minimum supported Rust version (1.70)
+    name: minimum supported Rust version (1.85)
     runs-on: ubuntu-latest
     env:
-      # rust-toolchain.toml pins stable. This variable overrides it, so the check really uses 1.70.
-      RUSTUP_TOOLCHAIN: "1.70.0"
+      # rust-toolchain.toml pins stable. This variable overrides it, so the check really uses 1.85.
+      # 1.85 is the floor because Cargo parses every git dependency in the lockfile, including the
+      # optional tpt-version, which uses edition 2024.
+      RUSTUP_TOOLCHAIN: "1.85.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.70
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Build all features
         # ed25519 needs tpt-crypto, which requires Rust 1.84. Build the rest of the feature set here.
