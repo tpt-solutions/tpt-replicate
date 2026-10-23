@@ -84,6 +84,10 @@ pub enum TransportError {
 pub enum SnapshotError {
     /// The snapshot store rejected the write.
     Storage(String),
+    /// The snapshot bytes do not decode.
+    Malformed,
+    /// The decoded state does not hash to the value the snapshot claimed.
+    HashMismatch,
 }
 
 /// A received frame was dropped. The link stays up.
@@ -99,6 +103,8 @@ pub enum FrameError {
     Clock(ClockError),
     /// A `Pong` did not answer a ping this replica sent.
     UnexpectedPong,
+    /// A snapshot could not be installed.
+    BadSnapshot(SnapshotError),
 }
 
 /// Restoring a replica from an exported log failed.

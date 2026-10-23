@@ -12,6 +12,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::builder::ReplicaBuilder;
 use crate::clock::{ClockSource, HybridClock, Timestamp, VectorClock};
 use crate::codec::{BinaryCodec, Codec, MAX_DEPS, MAX_FRAME, MAX_OPS_PER_MESSAGE, MAX_PAYLOAD};
 use crate::error::{
@@ -24,7 +25,7 @@ use crate::merge::{AllowAll, MergeLimits, MergeReport, Merger, OpPolicy, DEFAULT
 use crate::peer::{Peer, PeerState};
 use crate::stubs::crypto::{Signer, Verifier};
 use crate::stubs::{ActorId, Snapshot, SnapshotSink, State, UirNode};
-use crate::sync::{calculate_delta, chunk_ops, Envelope, Message};
+use crate::sync::{calculate_delta, chunk_ops, Envelope, Message, SnapshotMsg};
 use crate::transport::Transport;
 
 /// Most events kept while the application has not drained them. Older events are dropped first.
@@ -110,12 +111,29 @@ pub enum Event {
     },
     /// A committed batch could not be folded into the local clock. The operations are in the log.
     ClockFoldFailed(ClockError),
-    /// The peer's clock is behind compaction. It needs a snapshot before it can catch up.
+    /// The peer's clock is behind compaction, so this replica sent it a snapshot.
     PeerNeedsSnapshot(ActorId),
+    /// This replica installed a snapshot from a peer. `floor` is the snapshot's compaction floor.
+    SnapshotInstalled { floor: Option<Timestamp> },
     /// The log and state were compacted up to `cutoff`.
     Compacted { cutoff: Timestamp, removed: usize },
     /// The snapshot sink rejected a snapshot, so compaction was skipped.
     SnapshotFailed(SnapshotError),
+}
+
+/// Point-in-time counters for monitoring. Read with [`Replica::stats`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplicaStats {
+    /// Entries retained in the log.
+    pub log_len: usize,
+    /// Operations held waiting for causes.
+    pub pending: usize,
+    /// Peers registered with the replica, in any state.
+    pub peers: usize,
+    /// Peers that have acknowledged this replica's clock and receive live operations.
+    pub peers_up_to_date: usize,
+    /// Operations applied or logged since the last compaction.
+    pub ops_since_snapshot: u64,
 }
 
 /// A replica's operation log, with what it needs to resume. Produced by [`Replica::export_log`]
@@ -176,6 +194,11 @@ pub struct Replica<S: State> {
 }
 
 impl<S: State> Replica<S> {
+    /// Starts a [`ReplicaBuilder`] for `actor` holding `state`. This is the easiest way in.
+    pub fn builder(actor: ActorId, state: S) -> ReplicaBuilder<S> {
+        ReplicaBuilder::new(actor, state)
+    }
+
     /// Creates a replica with an empty log, the default config and the binary codec.
     pub fn new(
         actor: ActorId,
@@ -307,6 +330,21 @@ impl<S: State> Replica<S> {
         self.peers
             .get(&peer)
             .map(|link| link.peer.pending_ops(&self.log))
+    }
+
+    /// Current counters. Cheap to call on every tick of a monitoring loop.
+    pub fn stats(&self) -> ReplicaStats {
+        ReplicaStats {
+            log_len: self.log.len(),
+            pending: self.merger.pending_len(),
+            peers: self.peers.len(),
+            peers_up_to_date: self
+                .peers
+                .values()
+                .filter(|link| link.peer.state == PeerState::UpToDate)
+                .count(),
+            ops_since_snapshot: self.ops_since_snapshot,
+        }
     }
 
     /// Takes all queued events. The queue holds at most [`MAX_QUEUED_EVENTS`]. The oldest are
@@ -514,6 +552,7 @@ impl<S: State> Replica<S> {
                     Err(FrameError::UnexpectedPong.into())
                 }
             }
+            Message::Snapshot(snapshot) => Ok(self.adopt_snapshot(link, &snapshot)?),
         }
     }
 
@@ -559,14 +598,83 @@ impl<S: State> Replica<S> {
     }
 
     fn send_delta(&mut self, link: &mut Link, peer_clock: &VectorClock) -> Result<(), Failure> {
-        if !self.log.can_serve(peer_clock) {
-            push_event(&mut self.events, Event::PeerNeedsSnapshot(link.peer.id));
-            return Ok(());
+        if self.log.can_serve(peer_clock) {
+            return self.send_ops_after(link, peer_clock);
         }
-        let ops = calculate_delta(&self.log, peer_clock);
+        // The peer is behind compaction, so the operations it needs are gone. Send the state
+        // instead. Installing it leaves the peer at our compacted clock, so the delta that follows
+        // starts from there.
+        push_event(&mut self.events, Event::PeerNeedsSnapshot(link.peer.id));
+        let snapshot = SnapshotMsg {
+            state: self.state.encode_state(),
+            state_hash: self.state.state_hash(),
+            clock: self.log.clock().clone(),
+            compacted: self.log.compacted().clone(),
+            floor: self.merger.floor(),
+        };
+        self.transmit(link, &Message::Snapshot(Box::new(snapshot)))?;
+        let compacted = self.log.compacted().clone();
+        self.send_ops_after(link, &compacted)
+    }
+
+    fn send_ops_after(&mut self, link: &mut Link, clock: &VectorClock) -> Result<(), Failure> {
+        let ops = calculate_delta(&self.log, clock);
         for chunk in chunk_ops(&ops, self.config.max_ops_per_frame, DELTA_BYTE_BUDGET) {
             self.transmit(link, &Message::Delta(chunk))?;
         }
+        Ok(())
+    }
+
+    /// Installs a snapshot from a peer. The state is replaced by the snapshot's. Operations this
+    /// replica has that the snapshot does not cover are kept and re-applied on top. The log is
+    /// rebased to the snapshot's compacted clock, and the delta that follows fills in the retained
+    /// operations.
+    fn adopt_snapshot(
+        &mut self,
+        link: &mut Link,
+        snapshot: &SnapshotMsg,
+    ) -> Result<(), FrameError> {
+        // Verify before anything else. A snapshot that is not new to us must still be well formed.
+        let mut state = S::decode_state(&snapshot.state).map_err(FrameError::BadSnapshot)?;
+        if state.state_hash() != snapshot.state_hash {
+            return Err(FrameError::BadSnapshot(SnapshotError::HashMismatch));
+        }
+        link.peer.absorb_clock(&snapshot.clock);
+        if self.log.clock().dominates(&snapshot.clock) {
+            // Nothing in the snapshot is new to us.
+            return Ok(());
+        }
+        let kept: Vec<StampedOperation> = self
+            .log
+            .ops()
+            .iter()
+            .filter(|op| op.seq > snapshot.clock.get(op.actor))
+            .cloned()
+            .collect();
+        for op in &kept {
+            let below_floor = snapshot.floor.is_some_and(|floor| op.timestamp <= floor);
+            if below_floor || self.policy.check(op.actor, &op.op).is_err() {
+                continue;
+            }
+            // A refused apply was refused the first time too. Ignoring it keeps the same result.
+            let _ = state.apply(&op.timestamp, &op.op);
+        }
+        let mut compacted = self.log.compacted().clone();
+        compacted.merge(&snapshot.compacted);
+        self.state = state;
+        self.log = ReplicatedLog::from_parts(kept, compacted);
+        if let Some(floor) = snapshot.floor {
+            self.merger.set_floor(floor);
+            if let Err(error) = self.clock.update(&floor) {
+                push_event(&mut self.events, Event::ClockFoldFailed(error));
+            }
+        }
+        push_event(
+            &mut self.events,
+            Event::SnapshotInstalled {
+                floor: snapshot.floor,
+            },
+        );
         Ok(())
     }
 

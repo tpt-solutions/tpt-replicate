@@ -7,7 +7,8 @@ use crate::clock::{Timestamp, VectorClock};
 use crate::error::CodecError;
 use crate::log::StampedOperation;
 use crate::stubs::{ActorId, UirNode};
-use crate::sync::Message;
+use crate::sync::{Message, SnapshotMsg};
+use alloc::boxed::Box;
 
 /// Largest accepted operation payload, in bytes.
 pub const MAX_PAYLOAD: usize = 1 << 20;
@@ -25,6 +26,7 @@ const TAG_DELTA: u8 = 1;
 const TAG_ACK: u8 = 2;
 const TAG_PING: u8 = 3;
 const TAG_PONG: u8 = 4;
+const TAG_SNAPSHOT: u8 = 5;
 
 /// Encodes and decodes message bodies. Implementations must round-trip exactly and must return
 /// an error, not panic, on malformed input.
@@ -66,6 +68,20 @@ impl Codec for BinaryCodec {
                 w.u8(TAG_PONG);
                 w.varint(*nonce);
             }
+            Message::Snapshot(snapshot) => {
+                w.u8(TAG_SNAPSHOT);
+                w.bytes(&snapshot.state);
+                w.varint(snapshot.state_hash);
+                w.clock(&snapshot.clock);
+                w.clock(&snapshot.compacted);
+                match &snapshot.floor {
+                    Some(floor) => {
+                        w.u8(1);
+                        w.timestamp(floor);
+                    }
+                    None => w.u8(0),
+                }
+            }
         }
         w.finish()
     }
@@ -85,6 +101,24 @@ impl Codec for BinaryCodec {
             TAG_ACK => Message::Ack(r.clock()?),
             TAG_PING => Message::Ping(r.varint()?),
             TAG_PONG => Message::Pong(r.varint()?),
+            TAG_SNAPSHOT => {
+                let state = r.bytes(MAX_FRAME)?;
+                let state_hash = r.varint()?;
+                let clock = r.clock()?;
+                let compacted = r.clock()?;
+                let floor = match r.u8()? {
+                    0 => None,
+                    1 => Some(r.timestamp()?),
+                    other => return Err(CodecError::InvalidTag(other)),
+                };
+                Message::Snapshot(Box::new(SnapshotMsg {
+                    state,
+                    state_hash,
+                    clock,
+                    compacted,
+                    floor,
+                }))
+            }
             other => return Err(CodecError::InvalidTag(other)),
         };
         r.finish()?;

@@ -119,3 +119,60 @@ fn delay_tolerant_link_survives_a_quiet_day_that_would_kill_a_live_one() {
         .contains(&Event::PeerDisconnected(b.actor())));
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn reconnecting_link_repairs_itself_after_the_far_end_goes_away() {
+    use std::thread::sleep;
+    use tpt_replicate::transport::{ReconnectingTcp, TcpAcceptor};
+
+    let mut acceptor = TcpAcceptor::bind("127.0.0.1:0").unwrap();
+    let addr = acceptor.local_addr().unwrap().to_string();
+    // A fixed clock keeps the test about the socket, not about timers.
+    let clock = ManualClock::new(1_000);
+    let mut a = replica(1, &clock);
+    let mut b = replica(2, &clock);
+    a.add_peer(b.actor(), Box::new(ReconnectingTcp::new(addr)));
+    a.local_op(set("k", "v")).unwrap();
+
+    let first = (0..400)
+        .find_map(|_| {
+            a.poll();
+            let accepted = acceptor.accept().unwrap();
+            sleep(Duration::from_millis(5));
+            accepted.map(|(_, link)| link)
+        })
+        .expect("dialing side connects to the listener");
+    b.add_peer(a.actor(), Box::new(first));
+    for _ in 0..400 {
+        a.poll();
+        b.poll();
+        if b.log().len() == 1 {
+            break;
+        }
+        sleep(Duration::from_millis(5));
+    }
+    assert_eq!(b.log().len(), 1);
+
+    // The far end drops its connection. The dialing side notices, backs off and dials again.
+    b.remove_peer(a.actor());
+    a.local_op(set("k2", "v2")).unwrap();
+    let second = (0..800)
+        .find_map(|_| {
+            a.poll();
+            let accepted = acceptor.accept().unwrap();
+            sleep(Duration::from_millis(10));
+            accepted.map(|(_, link)| link)
+        })
+        .expect("dialing side reconnects after backing off");
+    b.add_peer(a.actor(), Box::new(second));
+    for _ in 0..400 {
+        a.poll();
+        b.poll();
+        if b.log().len() == 2 {
+            break;
+        }
+        sleep(Duration::from_millis(5));
+    }
+    assert_eq!(b.log().len(), 2);
+    assert_eq!(b.state().get(b"k2"), Some(&b"v2"[..]));
+}

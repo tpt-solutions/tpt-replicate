@@ -436,3 +436,30 @@ fn policy_quarantines_remote_ops_and_refuses_local_ones() {
     );
     assert!(a.log().is_empty(), "a refused local op is never logged");
 }
+
+#[test]
+fn stats_reports_peer_health_and_pending_depth() {
+    let clock = ManualClock::new(1_000);
+    let mut a = replica(1, &clock);
+    let mut b = replica(2, &clock);
+    assert_eq!(a.stats().peers, 0);
+    link(&mut a, &mut b, 8, Faults::default());
+    settle(&mut [&mut a, &mut b], 4);
+    a.local_op(set("k", "v")).unwrap();
+    let stats = a.stats();
+    assert_eq!(stats.log_len, 1);
+    assert_eq!(stats.peers, 1);
+    assert_eq!(stats.peers_up_to_date, 1);
+    assert_eq!(stats.pending, 0);
+
+    // An operation from a gap in the sequence waits in the pending buffer.
+    b.import_ops(vec![forge(
+        3,
+        2,
+        1_000,
+        VectorClock::new(),
+        &lww_set("x", "1"),
+    )])
+    .unwrap();
+    assert_eq!(b.stats().pending, 1);
+}

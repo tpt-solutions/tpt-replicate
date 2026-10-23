@@ -417,4 +417,10 @@ mod std_transports {
 }
 
 #[cfg(feature = "std")]
-pub use std_transports::{FileTransport, TcpTransport};
+pub use std_transports::{FileTransport, TcpTransport, CONNECT_TIMEOUT, MAX_OUTBOUND_BYTES};
+
+#[cfg(feature = "std")]
+mod reconnect;
+
+#[cfg(feature = "std")]
+pub use reconnect::{ReconnectingTcp, TcpAcceptor};

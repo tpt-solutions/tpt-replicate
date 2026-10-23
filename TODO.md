@@ -68,7 +68,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] Log compaction after snapshot
 - [ ] Swap stubs for real tpt-* crates when available (tracked, blocked)
 - [x] README, rustdoc, examples (CAD vertex move, spreadsheet LWW, rover/orbiter DTN)
-- [ ] Publish v1.0.0 (version, changelog, license, `cargo publish --dry-run`) — version, changelog and dry run are done. Not published: license is undecided and the publish itself is outward-facing.
+- [ ] Publish v1.0.0 (version, changelog, license, `cargo publish --dry-run`) — version, changelog, license and dry run are done. Not published: the publish itself is outward-facing and needs your go-ahead.
 
 ## Testing & Quality
 - [x] proptest: 5 virtual peers, 1,000 random ops, shuffled delivery, equal state hash
@@ -81,8 +81,8 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 
 ## Open Items
 - [ ] Confirm real APIs of tpt-operations / tpt-primitives / tpt-crypto / tpt-uir / tpt-version / tpt-webrtc once available
-- [ ] Choose a license (blocks publish; `cargo publish --dry-run` warns about it)
-- [ ] Snapshot transfer for peers behind the compaction floor (currently they get `Event::PeerNeedsSnapshot` and no data)
+- [x] Choose a license: MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, Cargo metadata)
+- [x] Snapshot transfer for peers behind the compaction floor (see the next item)
 
 ## Notes from implementation
 - `StampedOperation` carries a `deps: VectorClock` (the author's clock at creation). The spec did not list it. It gives true cross-actor causal delivery and is signed.
@@ -109,34 +109,34 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] Regression test for each fix above (`tests/regressions.rs`, `tests/transport_limits.rs`). They were written against the fixed code and not run against the pre-fix code.
 
 ### B. Missing features
-- [ ] Snapshot transfer (`State` encode/decode, `Snapshot` wire message) and a real `Snapshot` payload
-- [ ] TCP listener and auto-reconnect with backoff
+- [x] Snapshot transfer (`State::encode_state` / `decode_state`, `Snapshot` wire message). **Not done:** chunked snapshots for states above one frame (16 MiB)
+- [x] TCP listener and auto-reconnect with backoff (`TcpAcceptor`, `ReconnectingTcp`). The application maps accepted connections to peers
 - [x] `Authorizer` trait (capability hook, default allow-all) — implemented as `OpPolicy` (`AllowAll` default), which also covers the next item
 - [x] App-level op validation hook — `OpPolicy::check` returns `ApplyError::Invalid(reason)`; refusals are quarantined like state refusals
 
 ### C. Innovation (optional)
-- [ ] `crdt` feature: OR-Set, PN-Counter, RGA list/text, MV-Register
-- [ ] Deterministic network simulator (`sim`): seeded partitions, latency, loss
-- [ ] Anti-entropy efficiency: range digests or compressed vector clocks
-- [ ] `Replica::stats()` plus an event/tracing sink
-- [ ] Persistence trait with file and in-memory impls
-- [ ] Replay protection (session nonce in `Envelope`)
+- [ ] `crdt` feature: OR-Set, PN-Counter, RGA list/text, MV-Register (not started)
+- [ ] Deterministic network simulator (`sim`): seeded partitions, latency, loss (not started; `MemoryTransport` has loss, duplication and reordering)
+- [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
+- [ ] `Replica::stats()` (done) plus an event/tracing sink (not done)
+- [ ] Persistence trait with file and in-memory impls (not started)
+- [ ] Replay protection (session nonce in `Envelope`) (not started)
 
 ### D. Usability and adoption
-- [ ] `prelude` module and `Replica::builder()` with defaults; ~10-line quickstart
-- [ ] `examples/quickstart.rs` and README as doctest
-- [ ] Examples: `tcp_chat`, `custom_crdt`, `custom_signer`, `three_peer_partition`
-- [ ] Demo CLI example (`serve` / `connect` / `set` / `get`) and a `cargo-generate` app template
-- [ ] `docs/` guide: concepts, protocol diagram, trait recipes, stub-to-real migration, troubleshooting
-- [ ] `rust-toolchain.toml`, devcontainer / Dockerfile, 3-peer docker-compose demo
-- [ ] README badges and install instructions (git dependency until published)
+- [x] `prelude` module and `Replica::builder()` with defaults; ~10-line quickstart
+- [x] `examples/quickstart.rs` and README as doctest
+- [x] Examples: `tcp_chat`, `custom_crdt`, `custom_signer`, `three_peer_partition`
+- [ ] Demo CLI example (`serve` / `connect` / `set` / `get`) and a `cargo-generate` app template. **Not done:** `tcp_chat` covers serve and connect only; no template
+- [x] `docs/` guide: concepts, protocol diagram, trait recipes, stub-to-real migration, troubleshooting (`docs/guide.md`)
+- [ ] `rust-toolchain.toml` and devcontainer (done). **Not done:** Dockerfile and 3-peer docker-compose demo (not runnable here, so not written)
+- [ ] README badges and install instructions (install done; badges need the repository URL, which is not known yet)
 
 ### E. Automation and release
-- [ ] Commit the untracked source tree
-- [ ] `.github/workflows/ci.yml`: OS matrix, stable + MSRV 1.70, thumbv7em, fmt, clippy, doc, run examples
-- [ ] `scripts/ci.sh` twin of `scripts/ci.ps1` (with `rustup target add`)
-- [ ] Scheduled workflow: heavy proptest, `cargo audit` / `deny`, coverage, `cargo-semver-checks`
-- [ ] Dependabot, release workflow, `[package.metadata.docs.rs]`
-- [ ] Criterion benches (merge, delta, codec)
-- [ ] `CONTRIBUTING.md`, `SECURITY.md`, issue / PR templates
+- [x] Commit the untracked source tree (commit `ca3e882` on branch `phase-5-review-fixes`)
+- [x] `.github/workflows/ci.yml`: OS matrix, stable + MSRV 1.70, thumbv7em, fmt, clippy, doc, run examples
+- [x] `scripts/ci.sh` twin of `scripts/ci.ps1` (with `rustup target add`)
+- [ ] Scheduled workflow: heavy proptest, `cargo audit`, coverage (done). **Not done:** `cargo deny`, `cargo-semver-checks` (needs a published baseline)
+- [x] Dependabot, release workflow (dry run on tags; no automatic publish), `[package.metadata.docs.rs]`
+- [x] Criterion benches (merge, delta, codec)
+- [x] `CONTRIBUTING.md`, `SECURITY.md`, issue / PR templates
 - [ ] Choose license (suggest `MIT OR Apache-2.0`), add `LICENSE-*` and Cargo metadata

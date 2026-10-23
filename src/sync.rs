@@ -3,7 +3,9 @@
 
 use alloc::vec::Vec;
 
-use crate::clock::VectorClock;
+use alloc::boxed::Box;
+
+use crate::clock::{Timestamp, VectorClock};
 use crate::codec::{Reader, Writer, MAX_FRAME, MAX_SIGNATURE};
 use crate::error::CodecError;
 use crate::log::{ReplicatedLog, StampedOperation};
@@ -24,6 +26,24 @@ pub enum Message {
     Ping(u64),
     /// Reply to [`Message::Ping`] with the same nonce.
     Pong(u64),
+    /// The sender's state, sent when the receiver is behind compaction. The receiver installs it,
+    /// then takes the operations after `compacted` from the delta that follows.
+    Snapshot(Box<SnapshotMsg>),
+}
+
+/// The payload of [`Message::Snapshot`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotMsg {
+    /// [`State::encode_state`](crate::stubs::State::encode_state) of the sender's state.
+    pub state: Vec<u8>,
+    /// [`State::state_hash`](crate::stubs::State::state_hash) of that state. The receiver checks it after decoding.
+    pub state_hash: u64,
+    /// The sender's full clock. Operations the receiver has beyond it are kept and re-applied.
+    pub clock: VectorClock,
+    /// What the sender has compacted. The receiver's log starts from here.
+    pub compacted: VectorClock,
+    /// The sender's compaction floor.
+    pub floor: Option<Timestamp>,
 }
 
 /// Returns every operation in `local_log` that a peer with `peer_clock` has not seen, in

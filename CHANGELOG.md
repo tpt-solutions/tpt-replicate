@@ -36,9 +36,17 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - `Replica::export_log` and `Replica::restore` (with `LogImage`), so a replica can resume its sequence numbers and clock. The state is persisted separately.
 - `Replica::remove_peer`, `Transport::is_delay_tolerant`, and `Event::ClockFoldFailed`.
 - `FrameError::UnexpectedPong`: a `Pong` must answer a ping this replica sent.
+- Snapshot transfer. A peer behind the compaction floor receives the sender's encoded state (`State::encode_state` / `decode_state`, now required methods). The receiver checks the state hash, keeps its own operations that the snapshot does not cover, and takes the retained operations from the delta that follows. Events: `PeerNeedsSnapshot`, `SnapshotInstalled`.
+- `TcpAcceptor` (accepts connections without blocking) and `ReconnectingTcp` (dials with exponential backoff from 100 ms to 30 s, driven by the engine's polling).
+- `Replica::builder(actor, state)` and `ReplicaBuilder`. `BuildError` reports a missing clock or keys, so no key is chosen silently.
+- `prelude` module, `Replica::stats()` (`ReplicaStats`), and `LwwMap::iter()`.
+- Examples: `quickstart`, `tcp_chat`, `custom_crdt`, `custom_signer`, `three_peer_partition`.
+- Documentation: `docs/guide.md`, `CONTRIBUTING.md`, `SECURITY.md`, issue and pull-request templates. The README quick start is compiled as a doctest.
+- Continuous integration: `.github/workflows/ci.yml` (three OS, MSRV 1.70, bare-metal, dependency check), `scheduled.yml` (heavy property tests, audit, coverage), `release.yml` (publish dry run), Dependabot, and `scripts/ci.sh`.
+- Dual license: MIT OR Apache-2.0.
 
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).
-- Snapshot transfer for peers behind the compaction floor.
-- License selection and crates.io publication.
+- Crates.io publication (waiting on the first release).
+- Chunked snapshots for states larger than one frame.

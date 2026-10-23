@@ -47,6 +47,16 @@ pub trait State: CrdtCompatible + Clone {
     /// Drops metadata that is no longer needed for ordering at or before `cutoff`, such as
     /// tombstones.
     fn compact(&mut self, cutoff: &Timestamp);
+
+    /// Serialises the full state, tombstones included, for snapshot transfer. Must round-trip
+    /// through [`State::decode_state`] to a state with the same [`State::state_hash`].
+    fn encode_state(&self) -> Vec<u8>;
+
+    /// Rebuilds a state from bytes made by [`State::encode_state`]. Returns an error for malformed
+    /// input rather than panicking, because the bytes come from a peer.
+    fn decode_state(bytes: &[u8]) -> Result<Self, SnapshotError>
+    where
+        Self: Sized;
 }
 
 /// Summary of a point in the log that is safe to compact.

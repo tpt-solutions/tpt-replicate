@@ -7,6 +7,11 @@ description = "Pure-Rust, no_std + alloc offline-first CRDT sync and merge engin
 readme = "README.md"
 keywords = ["crdt", "replication", "no_std", "hlc", "sync"]
 categories = ["no-std", "data-structures", "network-programming"]
+license = "MIT OR Apache-2.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
@@ -18,8 +23,25 @@ webrtc = []
 [dependencies]
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
 
 [[example]]
 name = "rover_dtn"
 required-features = ["std"]
+
+[[example]]
+name = "tcp_chat"
+required-features = ["std"]
+
+[[bench]]
+name = "merge"
+harness = false
+
+[[bench]]
+name = "delta"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false

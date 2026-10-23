@@ -4,44 +4,51 @@ Pure-Rust, offline-first replication engine for the TPT ecosystem. It provides:
 
 - **Hybrid Logical Clocks** (`clock`): total ordering of events across skewed clocks, with a bound on accepted remote drift and detection of counter overflow.
 - **A causal operation log** (`log`): per-actor sequence numbers, dependency vectors, watermarks and compaction.
-- **A deterministic merge executor** (`merge`): authenticates operations, buffers ones whose causes are missing, applies the rest in timestamp order, and is all-or-nothing per batch.
-- **Delta sync** (`sync`, `engine`): a Hello, Delta, Ack handshake that sends only what a peer lacks, in bounded batches.
-- **Transport-agnostic peers** (`transport`, `peer`): heartbeats, dead-peer detection, automatic resume after reconnection, and anti-entropy re-sync.
+- **A deterministic merge executor** (`merge`): authenticates operations, buffers ones whose causes are missing, applies the rest in timestamp order, and quarantines operations the state refuses.
+- **Delta sync** (`sync`, `engine`): a Hello, Delta, Ack handshake that sends only what a peer lacks, in bounded batches, with snapshot transfer for peers behind compaction.
+- **Transport-agnostic peers** (`transport`, `peer`): heartbeats, dead-peer detection, automatic resume after reconnection, anti-entropy re-sync, and TCP links that redial with backoff.
 
 The core is `no_std` + `alloc` with no dependencies.
 
-## Dependency audit
+## Install
 
-`cargo tree -e normal --no-default-features` lists only the crate itself. The only dev-dependency is `proptest`, which is used by the tests and is not part of the library.
+Until the crate is published, depend on it from git:
+
+```toml
+[dependencies]
+tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate" }
+```
+
+Enable the `std` feature for `SystemClock`, file and TCP transports:
+
+```toml
+tpt-replicate = { git = "https://github.com/PhillipC05/tpt-replicate", features = ["std"] }
+```
 
 ## Features
 
 | Feature  | Adds |
 |----------|------|
 | *(none)* | The `no_std` core: clocks, log, merge, sync, peers, engine, in-memory transport, in-memory snapshot sink. |
-| `std`    | `SystemClock`, `FileTransport` (delay-tolerant link through a directory), `TcpTransport`. |
+| `std`    | `SystemClock`, `FileTransport` (delay-tolerant link through a directory), `TcpTransport`, `TcpAcceptor`, `ReconnectingTcp`. |
 | `webrtc` | `WebRtcTransport`, an adapter from a message-oriented data channel to `Transport`. |
 
 ## Quick start
 
 ```rust
-use tpt_replicate::clock::ManualClock;
-use tpt_replicate::stubs::crypto::{KeyedHashSigner, KeyedHashVerifier};
-use tpt_replicate::stubs::lww::{LwwMap, LwwOp};
-use tpt_replicate::transport::{Faults, MemoryTransport};
-use tpt_replicate::{ActorId, Replica};
+use tpt_replicate::prelude::*;
 
 let clock = ManualClock::new(1_000);
-let new_replica = |id: u64| {
-    Replica::new(
-        ActorId(id),
-        LwwMap::new(),
-        Box::new(KeyedHashSigner::new(ActorId(id), 42)),
-        Box::new(KeyedHashVerifier::new(42)),
-        Box::new(clock.clone()),
-    )
-};
-let (mut a, mut b) = (new_replica(1), new_replica(2));
+let mut a = Replica::builder(ActorId(1), LwwMap::new())
+    .shared_secret(42) // a stand-in key for demos; use `keys(...)` in production
+    .clock(Box::new(clock.clone()))
+    .build()
+    .unwrap();
+let mut b = Replica::builder(ActorId(2), LwwMap::new())
+    .shared_secret(42)
+    .clock(Box::new(clock))
+    .build()
+    .unwrap();
 
 let (ta, tb) = MemoryTransport::pair(7, Faults::default());
 a.add_peer(b.actor(), Box::new(ta));
@@ -56,7 +63,25 @@ for _ in 0..3 {
 assert_eq!(b.state().get(b"cell"), Some(&b"42"[..]));
 ```
 
-Examples live in `examples/`: `cad_vertex` (concurrent edits and tie-breaking), `spreadsheet_lww` (deletes against an offline collaborator), and `rover_dtn` (`cargo run --example rover_dtn --features std`).
+## Examples
+
+Run any of them with `cargo run --example <name>`. Examples marked `std` also need `--features std`.
+
+| Example | Shows |
+|---------|-------|
+| `quickstart` | The smallest program: two replicas over an in-memory link. |
+| `cad_vertex` | Concurrent edits and tie-breaking. |
+| `spreadsheet_lww` | Deletes against an offline collaborator. |
+| `three_peer_partition` | A triangle of replicas, a cut link, and convergence after repair. |
+| `custom_crdt` | A replicated register with its own operations and snapshot format. |
+| `custom_signer` | Plugging in a counting signer and an allow-list verifier. |
+| `rover_dtn` (`std`) | Delay-tolerant sync through a pair of directories. |
+| `tcp_chat` (`std`) | A two-person chat over TCP, with listener, dialer and reconnection. |
+
+## Documentation
+
+- [`docs/guide.md`](docs/guide.md): concepts, the wire protocol, trait recipes, migrating from the stubs, and troubleshooting.
+- [`CHANGELOG.md`](CHANGELOG.md): what changed.
 
 ## Design
 
@@ -71,7 +96,9 @@ Examples live in `examples/`: `cad_vertex` (concurrent edits and tie-breaking), 
 ## Limitations
 
 - **Signatures are a stand-in.** `stubs::crypto` uses a keyed 64-bit hash. It detects accidental and simple tampering and does not resist forgery. Replace it with `tpt-crypto` before deploying across untrusted networks.
-- **Compaction horizon.** Compaction is capped at the lowest watermark of any actor the replica has seen. A peer that has produced nothing yet can still hold back compaction, and an actor that has never been seen can still produce an operation older than the compaction floor. Such operations are logged but not applied, and that peer needs a snapshot to rejoin. Snapshot transfer is not implemented.
+- **Snapshots are trusted from peers.** A snapshot replaces the receiver's state. Its hash is checked, but its contents are not validated against the operation policy. Only snapshot from peers you trust.
+- **Snapshot size.** A snapshot is one frame, so the encoded state must fit within the frame limit (16 MiB). Larger states need chunked snapshots, which are not implemented.
+- **Relay is by anti-entropy.** Operations received from one peer are not forwarded live to others. They reach other peers at the next resync, which is every `resync_interval_ms`.
 - **Idle peers pin compaction.** The horizon moves only as fast as the least recently active actor. Compaction is delayed, not unsafe, while an idle peer stays idle.
 - **Stubs.** The `stubs` module stands in for `tpt-operations`, `tpt-primitives`, `tpt-uir`, `tpt-version` and `tpt-webrtc`. Their trait shapes are chosen to be replaceable, but the real APIs are unconfirmed.
 
@@ -81,4 +108,21 @@ Examples live in `examples/`: `cad_vertex` (concurrent edits and tie-breaking), 
 powershell -ExecutionPolicy Bypass -File scripts/ci.ps1
 ```
 
-The script checks formatting, builds with and without features, runs all tests, runs clippy and rustdoc with warnings as errors, builds for the `thumbv7em-none-eabihf` bare-metal target, and confirms the dependency list is empty.
+```sh
+sh scripts/ci.sh
+```
+
+Both scripts check formatting, build with and without features, run all tests, run clippy and rustdoc with warnings as errors, build for the `thumbv7em-none-eabihf` bare-metal target, and confirm the dependency list is empty.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues as described in [`SECURITY.md`](SECURITY.md).
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work by you shall be dual licensed as above, without any additional terms or conditions.

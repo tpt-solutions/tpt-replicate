@@ -5,7 +5,11 @@
 //! a delta-sync protocol and a transport-agnostic peer runtime.
 //!
 //! The core is `no_std` + `alloc`. The `std` feature adds `SystemClock`, `FileTransport` (for
-//! delay-tolerant links) and `TcpTransport`. The `webrtc` feature adds a data-channel adapter.
+//! delay-tolerant links), `TcpTransport`, `TcpAcceptor` and `ReconnectingTcp`. The `webrtc`
+//! feature adds a data-channel adapter.
+//!
+//! Start with [`Replica::builder`] or [`prelude`]. The guide in `docs/guide.md` covers concepts
+//! and the wire protocol.
 //!
 //! Sibling TPT crates (`tpt-operations`, `tpt-primitives`, `tpt-crypto`, `tpt-uir`,
 //! `tpt-version`, `tpt-webrtc`) are not published yet. [`stubs`] supplies local stand-ins that
@@ -18,6 +22,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod builder;
 pub mod clock;
 pub mod codec;
 pub mod engine;
@@ -26,12 +31,20 @@ pub mod gc;
 pub mod log;
 pub mod merge;
 pub mod peer;
+pub mod prelude;
 pub mod stubs;
 pub mod sync;
 pub mod transport;
 
+pub use builder::{BuildError, ReplicaBuilder};
+
+// The README's code blocks are compiled as doctests, so the quick start cannot go stale.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 pub use clock::{CausalOrder, HybridClock, Timestamp, VectorClock};
-pub use engine::{Event, LogImage, Replica, ReplicaConfig};
+pub use engine::{Event, LogImage, Replica, ReplicaConfig, ReplicaStats};
 pub use log::{ReplicatedLog, StampedOperation};
 pub use merge::{AllowAll, MergeLimits, MergeReport, Merger, OpPolicy};
 pub use peer::PeerState;

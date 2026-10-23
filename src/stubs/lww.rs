@@ -8,8 +8,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::clock::Timestamp;
-use crate::codec::{Reader, Writer, MAX_PAYLOAD};
-use crate::error::{ApplyError, CodecError};
+use crate::codec::{Reader, Writer, MAX_FRAME, MAX_PAYLOAD};
+use crate::error::{ApplyError, CodecError, SnapshotError};
 use crate::stubs::{CrdtCompatible, State, UirNode};
 
 const TAG_SET: u8 = 0;
@@ -113,6 +113,13 @@ impl LwwMap {
         self.entries.is_empty()
     }
 
+    /// Live `(key, value)` pairs in key order. Tombstones are skipped.
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
+        self.entries
+            .iter()
+            .filter_map(|(key, entry)| entry.value.as_deref().map(|value| (key.as_slice(), value)))
+    }
+
     /// Number of tombstones currently retained.
     pub fn tombstones(&self) -> usize {
         self.entries
@@ -171,6 +178,44 @@ impl State for LwwMap {
     fn compact(&mut self, cutoff: &Timestamp) {
         self.entries
             .retain(|_, entry| entry.value.is_some() || entry.stamp > *cutoff);
+    }
+
+    fn encode_state(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.varint(self.entries.len() as u64);
+        for (key, entry) in &self.entries {
+            w.bytes(key);
+            w.timestamp(&entry.stamp);
+            match &entry.value {
+                Some(value) => {
+                    w.u8(1);
+                    w.bytes(value);
+                }
+                None => w.u8(0),
+            }
+        }
+        w.finish()
+    }
+
+    fn decode_state(bytes: &[u8]) -> Result<Self, SnapshotError> {
+        let malformed = |_: CodecError| SnapshotError::Malformed;
+        let mut r = Reader::new(bytes);
+        let count = r.count(MAX_FRAME).map_err(malformed)?;
+        let mut entries = BTreeMap::new();
+        for _ in 0..count {
+            let key = r.bytes(MAX_PAYLOAD).map_err(malformed)?;
+            let stamp = r.timestamp().map_err(malformed)?;
+            let value = match r.u8().map_err(malformed)? {
+                0 => None,
+                1 => Some(r.bytes(MAX_PAYLOAD).map_err(malformed)?),
+                _ => return Err(SnapshotError::Malformed),
+            };
+            if entries.insert(key, Entry { stamp, value }).is_some() {
+                return Err(SnapshotError::Malformed);
+            }
+        }
+        r.finish().map_err(malformed)?;
+        Ok(Self { entries })
     }
 }
 
