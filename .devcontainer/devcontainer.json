@@ -1,0 +1,10 @@
+{
+  "name": "tpt-replicate",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  },
+  "postCreateCommand": "rustup target add thumbv7em-none-eabihf && cargo fetch"
+}

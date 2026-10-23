@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Build without default features
+        run: cargo build --no-default-features
+      - name: Build all features and targets
+        run: cargo build --all-features --all-targets
+      - name: Test without default features
+        run: cargo test
+      - name: Test all features
+        run: cargo test --all-features
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Rustdoc
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Examples
+        run: |
+          cargo run --example quickstart
+          cargo run --example custom_crdt
+          cargo run --example custom_signer
+          cargo run --example three_peer_partition
+          cargo run --example cad_vertex
+          cargo run --example spreadsheet_lww
+          cargo run --example rover_dtn --features std
+
+  msrv:
+    name: minimum supported Rust version (1.70)
+    runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins stable. This variable overrides it, so the check really uses 1.70.
+      RUSTUP_TOOLCHAIN: "1.70.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.70
+      - uses: Swatinem/rust-cache@v2
+      - name: Build all features
+        run: cargo build --all-features
+
+  bare-metal:
+    name: no_std bare-metal build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: Build for thumbv7em-none-eabihf
+        run: cargo build --no-default-features --target thumbv7em-none-eabihf
+
+  dependencies:
+    name: no runtime dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check normal dependency list is empty
+        run: |
+          deps=$(cargo tree -e normal --no-default-features --prefix none | grep -v '^tpt-replicate ' || true)
+          if [ -n "$deps" ]; then echo "unexpected dependencies:"; echo "$deps"; exit 1; fi

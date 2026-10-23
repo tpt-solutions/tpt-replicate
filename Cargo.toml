@@ -1,0 +1,47 @@
+[package]
+name = "tpt-replicate"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Pure-Rust, no_std + alloc offline-first CRDT sync and merge engine: hybrid logical clocks, causal operation log, delta sync"
+readme = "README.md"
+keywords = ["crdt", "replication", "no_std", "hlc", "sync"]
+categories = ["no-std", "data-structures", "network-programming"]
+license = "MIT OR Apache-2.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+# Enables SystemClock, FileTransport and TcpTransport.
+std = []
+# Enables the WebRTC data-channel adapter against the stubbed tpt-webrtc trait.
+webrtc = []
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+
+[[example]]
+name = "rover_dtn"
+required-features = ["std"]
+
+[[example]]
+name = "tcp_chat"
+required-features = ["std"]
+
+[[bench]]
+name = "merge"
+harness = false
+
+[[bench]]
+name = "delta"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false

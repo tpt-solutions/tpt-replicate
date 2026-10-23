@@ -1,0 +1,165 @@
+//! Snapshot transfer: a replica that is behind compaction installs the sender's state instead of
+//! waiting for operations that no longer exist.
+
+mod common;
+
+use common::*;
+use tpt_replicate::clock::{ManualClock, Timestamp};
+use tpt_replicate::error::SnapshotError;
+use tpt_replicate::stubs::lww::LwwMap;
+use tpt_replicate::stubs::{ActorId, CrdtCompatible, MemorySnapshotSink, State};
+use tpt_replicate::transport::Faults;
+use tpt_replicate::{Event, ReplicaConfig};
+
+fn compacting() -> ReplicaConfig {
+    ReplicaConfig {
+        snapshot_every_ops: 1,
+        ..ReplicaConfig::default()
+    }
+}
+
+fn stamp(wall: u64) -> Timestamp {
+    Timestamp {
+        wall_time: wall,
+        logical_counter: 0,
+        actor_id: ActorId(1),
+    }
+}
+
+#[test]
+fn state_encoding_keeps_tombstones_and_rejects_garbage() {
+    let mut map = LwwMap::new();
+    map.apply(&stamp(10), &set("live", "yes")).unwrap();
+    map.apply(&stamp(11), &set("gone", "x")).unwrap();
+    map.apply(&stamp(12), &delete("gone")).unwrap();
+
+    let decoded = LwwMap::decode_state(&map.encode_state()).unwrap();
+    assert_eq!(decoded.state_hash(), map.state_hash());
+    assert_eq!(decoded.get(b"live"), Some(&b"yes"[..]));
+    // The tombstone survives, so a late write still cannot resurrect the key.
+    assert_eq!(decoded.tombstones(), 1);
+    assert_eq!(decoded, map);
+
+    assert_eq!(
+        LwwMap::decode_state(&[0xFF, 0xFF, 0xFF]),
+        Err(SnapshotError::Malformed)
+    );
+    let mut trailing = map.encode_state();
+    trailing.push(0);
+    assert_eq!(
+        LwwMap::decode_state(&trailing),
+        Err(SnapshotError::Malformed)
+    );
+}
+
+#[test]
+fn late_joiner_installs_snapshot_instead_of_deltas() {
+    let clock = ManualClock::new(1_000);
+    let mut a = replica(1, &clock)
+        .with_config(compacting())
+        .with_snapshot_sink(Box::new(MemorySnapshotSink::default()));
+    let mut b = replica(2, &clock)
+        .with_config(compacting())
+        .with_snapshot_sink(Box::new(MemorySnapshotSink::default()));
+    link(&mut a, &mut b, 3, Faults::default());
+    for i in 0..10 {
+        clock.advance(1);
+        a.local_op(set(&format!("k{i}"), "v")).unwrap();
+    }
+    settle(&mut [&mut a, &mut b], 8);
+    assert!(a.log().len() < 10, "compaction should have trimmed the log");
+
+    // C arrives after the history it would need has been compacted away.
+    let mut c = replica(3, &clock);
+    link(&mut a, &mut c, 4, Faults::default());
+    settle(&mut [&mut a, &mut b, &mut c], 8);
+    assert_eq!(c.state().state_hash(), a.state().state_hash());
+    let events = c.drain_events();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::SnapshotInstalled { .. })));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, Event::FrameRejected { .. })));
+
+    // Live traffic flows both ways afterwards.
+    clock.advance(1);
+    c.local_op(set("from-c", "hello")).unwrap();
+    settle(&mut [&mut a, &mut b, &mut c], 8);
+    // Remote operations are not relayed live. b learns about them from the next anti-entropy
+    // exchange, which waits for the resync interval.
+    clock.advance(10_000);
+    settle(&mut [&mut a, &mut b, &mut c], 8);
+    assert_eq!(a.state().get(b"from-c"), Some(&b"hello"[..]));
+    assert_eq!(b.state().state_hash(), a.state().state_hash());
+}
+
+#[test]
+fn joiner_keeps_its_own_unsynced_operation() {
+    let clock = ManualClock::new(1_000);
+    let mut a = replica(1, &clock)
+        .with_config(compacting())
+        .with_snapshot_sink(Box::new(MemorySnapshotSink::default()));
+    let mut b = replica(2, &clock)
+        .with_config(compacting())
+        .with_snapshot_sink(Box::new(MemorySnapshotSink::default()));
+    link(&mut a, &mut b, 5, Faults::default());
+    for i in 0..6 {
+        clock.advance(1);
+        a.local_op(set(&format!("k{i}"), "v")).unwrap();
+    }
+    settle(&mut [&mut a, &mut b], 8);
+    assert!(a.log().len() < 6);
+
+    // C writes while offline. The snapshot does not know about that write.
+    let mut c = replica(3, &clock);
+    clock.advance(1);
+    c.local_op(set("offline", "mine")).unwrap();
+    link(&mut a, &mut c, 6, Faults::default());
+    settle(&mut [&mut a, &mut b, &mut c], 8);
+    clock.advance(10_000);
+    settle(&mut [&mut a, &mut b, &mut c], 8);
+
+    assert_eq!(c.state().get(b"offline"), Some(&b"mine"[..]));
+    assert_eq!(a.state().get(b"offline"), Some(&b"mine"[..]));
+    assert_eq!(a.state().state_hash(), c.state().state_hash());
+    assert_eq!(a.state().state_hash(), b.state().state_hash());
+}
+
+#[test]
+fn snapshot_with_wrong_hash_is_refused() {
+    use tpt_replicate::codec::Codec;
+    use tpt_replicate::sync::{Message, SnapshotMsg};
+    use tpt_replicate::transport::Transport;
+    let clock = ManualClock::new(1_000);
+    let mut c = replica(3, &clock);
+    let (ta, mut tb) = tpt_replicate::transport::MemoryTransport::pair(9, Faults::default());
+    c.add_peer(ActorId(1), Box::new(ta));
+    c.poll();
+
+    let mut peer = replica(1, &clock);
+    peer.local_op(set("x", "1")).unwrap();
+    let bogus = SnapshotMsg {
+        state: LwwMap::new().encode_state(),
+        state_hash: 0xDEAD_BEEF,
+        clock: Default::default(),
+        compacted: Default::default(),
+        floor: None,
+    };
+    let frame = tpt_replicate::sync::Envelope::seal(
+        &tpt_replicate::stubs::crypto::KeyedHashSigner::new(ActorId(1), SECRET),
+        ActorId(1),
+        tpt_replicate::codec::BinaryCodec.encode(&Message::Snapshot(Box::new(bogus))),
+    )
+    .encode();
+    tb.send(&frame).unwrap();
+    c.poll();
+    assert!(c.drain_events().iter().any(|e| matches!(
+        e,
+        Event::FrameRejected {
+            error: tpt_replicate::error::FrameError::BadSnapshot(SnapshotError::HashMismatch),
+            ..
+        }
+    )));
+    assert!(c.log().is_empty());
+}
