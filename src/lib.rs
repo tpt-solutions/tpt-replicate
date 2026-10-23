@@ -43,6 +43,8 @@ pub mod sync;
 pub mod transport;
 #[cfg(feature = "version")]
 pub mod version;
+#[cfg(feature = "webrtc-app")]
+pub mod webrtc_app;
 
 pub use builder::{BuildError, ReplicaBuilder};
 #[cfg(feature = "std")]
