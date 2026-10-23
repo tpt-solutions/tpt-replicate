@@ -129,3 +129,14 @@ pub enum EngineError {
     /// every peer reject the batch that carries it, so it is refused here.
     OperationTooLarge,
 }
+
+/// Recovering a replica from a checkpoint failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecoverError {
+    /// The checkpoint bytes do not decode.
+    Malformed,
+    /// The state section does not decode.
+    State(SnapshotError),
+    /// The state and log do not fit together.
+    Restore(RestoreError),
+}

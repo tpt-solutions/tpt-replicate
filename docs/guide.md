@@ -154,6 +154,25 @@ Drain events with `Replica::drain_events()` after each poll. The queue keeps the
 | `Compacted { cutoff, removed }` | The log was compacted. | Nothing. |
 | `SnapshotFailed(error)` | The sink refused a snapshot, so compaction was skipped. | Check storage. The log keeps growing until this succeeds. |
 
+## Restarting from a checkpoint
+
+`Replica::checkpoint()` returns the state and the log as one blob. Store it with a
+`CheckpointStore` (`MemoryStore`, or `FileStore` with `std`), and rebuild the replica with
+`Replica::recover(bytes, actor, signer, verifier, clock)`. The sequence numbers and the clock resume
+from the log, so peers see no gap and no reuse. Pending operations and peer links are not saved, and
+the handshake restores them.
+
+Save a checkpoint after a batch of work, not after every operation. A checkpoint of a large log is
+large, so checkpoint after compaction where you can.
+
+## Replicated types (`crdt` feature)
+
+`crdt::PnCounter` and `crdt::OrSet` are ready-made states. Build a replica over either one with
+`Replica::builder`. Update through `PnCounter::add(delta)`, and `OrSet::add(element)` and
+`OrSet::remove(element, state)`. `OrSet::remove` removes only the adds the caller has seen, so a
+concurrent add survives. Both types tolerate a repeated operation, which snapshot installation can
+cause.
+
 ## Troubleshooting
 
 **A peer never reaches `UpToDate`.** Check for `FrameRejected` events with `Auth`. This usually
