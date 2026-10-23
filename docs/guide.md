@@ -200,3 +200,10 @@ timers rebase to the new time.
 
 **Tests are flaky under a `ManualClock`.** Anti-entropy and liveness both depend on the clock.
 Advance it past `resync_interval_ms` before expecting relayed operations to arrive.
+
+## Real Ed25519 signatures (`ed25519` feature)
+
+`ed25519::Ed25519Signer` signs with a key from `tpt-crypto`, and `ed25519::Ed25519Directory` maps each
+actor to its registered public key. Frames from an actor with no key, or signed by the wrong key, are
+refused as `FrameError::Auth`. The feature needs Rust 1.84 and network access to GitHub, because
+`tpt-crypto` is a git dependency. The core crate itself keeps no runtime dependencies.

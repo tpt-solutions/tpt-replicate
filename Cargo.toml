@@ -21,8 +21,12 @@ std = []
 webrtc = []
 # Enables PnCounter and OrSet in the `crdt` module.
 crdt = []
+# Ed25519 signing and verification from tpt-crypto (see src/ed25519.rs). Needs Rust 1.84 and network
+# access to GitHub when enabled. Off by default, so the core keeps no runtime dependencies.
+ed25519 = ["dep:tpt-crypto-sig"]
 
 [dependencies]
+tpt-crypto-sig = { git = "https://github.com/tpt-solutions/tpt-crypto", package = "tpt-crypto-sig", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -58,7 +58,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.70
       - uses: Swatinem/rust-cache@v2
       - name: Build all features
-        run: cargo build --all-features
+        # ed25519 needs tpt-crypto, which requires Rust 1.84. Build the rest of the feature set here.
+        run: cargo build --features std,crdt,webrtc
 
   bare-metal:
     name: no_std bare-metal build
