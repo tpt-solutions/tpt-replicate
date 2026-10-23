@@ -54,6 +54,8 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - Fixed: installing a snapshot that covered a replica's own unsynced operation could make its next local write reuse that operation's sequence number, so two different operations shared an author and sequence. Found by the simulator. `LogImage` now records the highest issued sequence number.
 
+- Faster merging: waiting operations are indexed by the one cause blocking them, so draining a backlog no longer rescans the whole buffer. Reversed delivery of 1000 operations went from about 4.8 ms to 1.7 ms, and ordered delivery from 9.7 ms to 1.8 ms (`benches/merge.rs`).
+
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).
