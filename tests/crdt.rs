@@ -406,3 +406,65 @@ fn rga_orders_concurrent_inserts_the_same_way_everywhere() {
     );
     assert_eq!(ada.state().state_hash(), bo.state().state_hash());
 }
+
+#[test]
+fn mv_register_keeps_concurrent_writes_until_one_supersedes_them() {
+    use tpt_replicate::crdt::MvRegister;
+    let clock = ManualClock::new(1_000);
+    let reg = |actor: u64| {
+        Replica::builder(ActorId(actor), MvRegister::default())
+            .shared_secret(SECRET)
+            .clock(Box::new(clock.clone()))
+            .build()
+            .expect("replica")
+    };
+    let mut ada = reg(1);
+    let mut bo = reg(2);
+    ada.local_op(MvRegister::write(b"draft", ada.state()))
+        .unwrap();
+    bo.import_ops(ada.log().ops().to_vec()).unwrap();
+
+    // Both write while unaware of each other.
+    clock.advance(1);
+    ada.local_op(MvRegister::write(b"ada's", ada.state()))
+        .unwrap();
+    clock.advance(1);
+    bo.local_op(MvRegister::write(b"bo's", bo.state())).unwrap();
+    let ada_ops: Vec<_> = ada.log().ops()[1..].to_vec();
+    let bo_ops: Vec<_> = bo.log().ops()[1..].to_vec();
+    ada.import_ops(bo_ops).unwrap();
+    bo.import_ops(ada_ops).unwrap();
+
+    let both: Vec<Vec<u8>> = ada.state().values().map(<[u8]>::to_vec).collect();
+    assert_eq!(both.len(), 2, "concurrent writes both survive");
+    assert_eq!(ada.state().state_hash(), bo.state().state_hash());
+    assert_eq!(ada.state().get(), None);
+
+    // A write made after seeing both supersedes them.
+    clock.advance(1);
+    ada.local_op(MvRegister::write(b"resolved", ada.state()))
+        .unwrap();
+    let resolved = ada.log().ops().last().unwrap().clone();
+    bo.import_ops(vec![resolved]).unwrap();
+    assert_eq!(ada.state().get(), Some(&b"resolved"[..]));
+    assert_eq!(bo.state().get(), Some(&b"resolved"[..]));
+}
+
+#[test]
+fn mv_register_snapshot_round_trips() {
+    use tpt_replicate::crdt::MvRegister;
+    let mut reg = MvRegister::default();
+    let stamp = |wall| Timestamp {
+        wall_time: wall,
+        logical_counter: 0,
+        actor_id: ActorId(1),
+    };
+    reg.apply(&stamp(1), &MvRegister::write(b"one", &reg))
+        .unwrap();
+    reg.apply(&stamp(2), &MvRegister::write(b"two", &reg))
+        .unwrap();
+    let bytes = reg.encode_state();
+    let decoded = MvRegister::decode_state(&bytes).unwrap();
+    assert_eq!(decoded, reg);
+    assert!(MvRegister::decode_state(&bytes[..bytes.len() - 1]).is_err());
+}

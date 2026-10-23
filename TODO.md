@@ -115,7 +115,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] App-level op validation hook — `OpPolicy::check` returns `ApplyError::Invalid(reason)`; refusals are quarantined like state refusals
 
 ### C. Innovation (optional)
-- [x] `crdt` feature: `PnCounter` and `OrSet` (done). **Not done:** RGA list/text, MV-Register
+- [x] `crdt` feature: `PnCounter`, `OrSet`, `Rga` (sequence) and `MvRegister` (done)
 - [x] Deterministic network simulator (`sim`): seeded writes, partitions, late joiners, loss, duplication and reordering. Latency is not modelled; the random poll order stands in for it
 - [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
 - [x] `Replica::stats()` and an event sink (`with_event_observer`). Tracing spans are not wired in

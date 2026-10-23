@@ -58,6 +58,8 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 
 - `crdt::Rga`: a replicated sequence (RGA). Concurrent inserts at one position are ordered by timestamp, and deletes leave tombstones. Tested under shuffled delivery and with two concurrent authors.
 
+- `crdt::MvRegister`: keeps concurrent writes side by side, and a write that has seen them replaces them.
+
 ### Not yet
 
 - Real `tpt-*` crate integration (blocked on their APIs).
