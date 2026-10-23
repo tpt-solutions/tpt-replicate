@@ -152,6 +152,8 @@ pub struct LogImage {
     pub floor: Option<Timestamp>,
     /// [`State::state_hash`] at export time. Restoring checks the supplied state against it.
     pub state_hash: u64,
+    /// The highest sequence number this replica has issued itself. A restore never reuses one.
+    pub issued: u64,
 }
 
 struct Link {
@@ -225,6 +227,9 @@ pub struct Replica<S: State> {
     peers: BTreeMap<ActorId, Link>,
     sink: Option<Box<dyn SnapshotSink>>,
     ops_since_snapshot: u64,
+    /// Highest sequence number this replica has issued. Kept apart from the log clock, because a
+    /// snapshot can cover this replica's own operations and remove them from the log.
+    issued: u64,
     last_snapshot_ms: u64,
     events: EventQueue,
 }
@@ -258,6 +263,7 @@ impl<S: State> Replica<S> {
             peers: BTreeMap::new(),
             sink: None,
             ops_since_snapshot: 0,
+            issued: 0,
             last_snapshot_ms: now,
             events: EventQueue::new(),
         }
@@ -292,6 +298,7 @@ impl<S: State> Replica<S> {
                 .map_err(RestoreError::Clock)?;
         }
         replica.log = ReplicatedLog::from_parts(image.ops, image.compacted);
+        replica.issued = image.issued;
         Ok(replica)
     }
 
@@ -303,6 +310,7 @@ impl<S: State> Replica<S> {
             compacted: self.log.compacted().clone(),
             floor: self.merger.floor(),
             state_hash: self.state.state_hash(),
+            issued: self.issued,
         }
     }
 
@@ -435,6 +443,7 @@ impl<S: State> Replica<S> {
             .log
             .clock()
             .get(self.actor)
+            .max(self.issued)
             .checked_add(1)
             .ok_or(EngineError::SequenceExhausted)?;
         self.policy
@@ -450,6 +459,7 @@ impl<S: State> Replica<S> {
             signature: Vec::new(),
         };
         stamped.signature = self.signer.sign(&stamped.signing_bytes());
+        self.issued = seq;
         self.log.insert(stamped.clone());
         self.ops_since_snapshot += 1;
         self.broadcast(&stamped);
@@ -534,7 +544,7 @@ impl<S: State> Replica<S> {
             return;
         }
         if now.saturating_sub(link.peer.last_ping_ms) >= self.config.ping_interval_ms {
-            link.peer.last_ping_ms = now;
+            link.peer.record_ping(now);
             if self.transmit(link, &Message::Ping(now)).is_err() {
                 self.lose_link(link);
             }
@@ -592,7 +602,7 @@ impl<S: State> Replica<S> {
             }
             Message::Ping(nonce) => self.transmit(link, &Message::Pong(nonce)),
             Message::Pong(nonce) => {
-                if nonce == link.peer.last_ping_ms {
+                if link.peer.take_pong(nonce) {
                     Ok(())
                 } else {
                     Err(FrameError::UnexpectedPong.into())
@@ -747,6 +757,7 @@ impl<S: State> Replica<S> {
             // A refused apply was refused the first time too. Ignoring it keeps the same result.
             let _ = state.apply(&op.timestamp, &op.op);
         }
+        self.issued = self.issued.max(snapshot.clock.get(self.actor));
         let mut compacted = self.log.compacted().clone();
         compacted.merge(&snapshot.compacted);
         self.state = state;

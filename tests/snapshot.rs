@@ -272,3 +272,50 @@ fn large_state_arrives_in_chunks_and_installs() {
         .iter()
         .any(|e| matches!(e, Event::FrameRejected { .. })));
 }
+
+#[test]
+fn snapshot_covering_our_own_operation_does_not_reuse_its_sequence_number() {
+    // Regression: installing a snapshot that covers this replica's own operation removed that
+    // operation from the log, and the next local write reused its sequence number. Two different
+    // operations then carried the same (author, seq), which peers read as equivocation.
+    use tpt_replicate::sync::{Message, SnapshotHeader};
+    use tpt_replicate::transport::{MemoryTransport, Transport};
+
+    let clock = ManualClock::new(1_000);
+    let mut c = replica(3, &clock);
+    c.local_op(set("own", "1")).unwrap();
+    let own = c.log().ops()[0].clone();
+    assert_eq!(own.seq, 1);
+
+    // A snapshot from peer 1 whose state holds our own write, and whose clock covers it.
+    let mut peer_state = LwwMap::new();
+    peer_state.apply(&own.timestamp, &own.op).unwrap();
+    let state = peer_state.encode_state();
+    let header = SnapshotHeader {
+        state_len: state.len(),
+        state_hash: peer_state.state_hash(),
+        clock: {
+            let mut clock = tpt_replicate::clock::VectorClock::new();
+            clock.observe(ActorId(3), 1);
+            clock.observe(ActorId(1), 4);
+            clock
+        },
+        compacted: Default::default(),
+        floor: None,
+    };
+    let (ta, mut tb) = MemoryTransport::pair(21, Faults::default());
+    c.add_peer(ActorId(1), Box::new(ta));
+    c.poll();
+    tb.send(&sealed_frame(&Message::SnapshotBegin(Box::new(header))))
+        .unwrap();
+    tb.send(&sealed_frame(&Message::SnapshotChunk(state)))
+        .unwrap();
+    c.poll();
+    assert!(c
+        .drain_events()
+        .iter()
+        .any(|e| matches!(e, Event::SnapshotInstalled { .. })));
+
+    let next = c.local_op(set("after", "install")).unwrap();
+    assert_eq!(next.seq, 2, "the sequence number must not go back");
+}

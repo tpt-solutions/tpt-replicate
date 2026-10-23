@@ -7,7 +7,12 @@
 //! The offline queue is the log itself. A peer that is not `UpToDate` gets no live broadcasts.
 //! The handshake delta replays everything it is missing, so nothing has to be buffered per peer.
 
+use alloc::vec::Vec;
+
 use crate::clock::VectorClock;
+
+/// Most pings kept while waiting for pongs.
+const MAX_OUTSTANDING_PINGS: usize = 8;
 use crate::log::ReplicatedLog;
 use crate::stubs::ActorId;
 
@@ -37,6 +42,10 @@ pub struct Peer {
     pub last_seen_ms: u64,
     /// Physical time of the last ping sent.
     pub last_ping_ms: u64,
+    /// Nonces of pings sent and not yet answered. A pong must match one of them.
+    pub outstanding_pings: Vec<u64>,
+    /// Nonces of recently answered pings. A repeat pong is a duplicated frame, not a forgery.
+    pub answered_pings: Vec<u64>,
     /// Physical time of the last hello sent.
     pub last_hello_ms: u64,
 }
@@ -50,6 +59,8 @@ impl Peer {
             remote_clock: VectorClock::new(),
             last_seen_ms: 0,
             last_ping_ms: 0,
+            outstanding_pings: Vec::new(),
+            answered_pings: Vec::new(),
             last_hello_ms: 0,
         }
     }
@@ -79,6 +90,37 @@ impl Peer {
     /// peer has, which would let compaction drop operations it still needs.
     pub fn replace_clock(&mut self, clock: &VectorClock) {
         self.remote_clock = clock.clone();
+    }
+
+    /// Records a ping sent at `now`. Only the most recent few are kept, so a lost pong does not
+    /// grow the list without bound.
+    pub fn record_ping(&mut self, now: u64) {
+        self.last_ping_ms = now;
+        self.outstanding_pings.push(now);
+        if self.outstanding_pings.len() > MAX_OUTSTANDING_PINGS {
+            self.outstanding_pings.remove(0);
+        }
+    }
+
+    /// Consumes the ping that `nonce` answers. Returns `false` if `nonce` answers no ping this replica
+    /// sent, neither outstanding nor recently answered. A repeat of a recent answer returns `true`,
+    /// because it is a duplicated frame.
+    pub fn take_pong(&mut self, nonce: u64) -> bool {
+        match self
+            .outstanding_pings
+            .iter()
+            .position(|sent| *sent == nonce)
+        {
+            Some(index) => {
+                self.outstanding_pings.remove(index);
+                self.answered_pings.push(nonce);
+                if self.answered_pings.len() > MAX_OUTSTANDING_PINGS {
+                    self.answered_pings.remove(0);
+                }
+                true
+            }
+            None => self.answered_pings.contains(&nonce),
+        }
     }
 
     /// Pulls every timer back to `now` if the physical clock moved backwards. Otherwise a timer set

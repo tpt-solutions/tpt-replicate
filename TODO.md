@@ -116,7 +116,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 
 ### C. Innovation (optional)
 - [x] `crdt` feature: `PnCounter` and `OrSet` (done). **Not done:** RGA list/text, MV-Register
-- [ ] Deterministic network simulator (`sim`): seeded partitions, latency, loss (not started; `MemoryTransport` has loss, duplication and reordering)
+- [x] Deterministic network simulator (`sim`): seeded writes, partitions, late joiners, loss, duplication and reordering. Latency is not modelled; the random poll order stands in for it
 - [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
 - [x] `Replica::stats()` and an event sink (`with_event_observer`). Tracing spans are not wired in
 - [x] Persistence: `Replica::checkpoint` / `recover` with `CheckpointStore`; `MemoryStore` and `FileStore` (atomic save)

@@ -35,6 +35,7 @@ pub mod log;
 pub mod merge;
 pub mod peer;
 pub mod prelude;
+pub mod sim;
 pub mod stubs;
 pub mod sync;
 pub mod transport;

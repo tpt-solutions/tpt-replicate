@@ -48,7 +48,11 @@ First full implementation of the design in `spec.txt` and `TODO.md`.
 - Checkpoints: `Replica::checkpoint()` encodes the state and log into one blob, and `Replica::recover()` rebuilds a replica from it. Damaged input returns `RecoverError`, never a panic. `CheckpointStore` with `MemoryStore` and, under `std`, `FileStore` (atomic save: temporary file, sync, rename).
 - `crdt` feature: `PnCounter` (up and down counter) and `OrSet` (add-wins set). Both tolerate repeated delivery, which snapshot installation can cause.
 - `Replica::with_event_observer`: a callback that sees every event as it is raised. Polling with `drain_events` still works.
+- Deterministic simulator (`sim` module, `run(SimConfig)`): seeded random writes, partitions, late joiners, lossy and reordering links, and compaction. Heavy seed sweep in the scheduled workflow.
+- Fixes found by the simulator: duplicate pongs were reported as unexpected, and a pong for an older ping was rejected after a newer ping went out. Both are now accepted, and only forged or unknown pongs are rejected.
 - `deny.toml` for `cargo deny`, run weekly by the scheduled workflow.
+
+- Fixed: installing a snapshot that covered a replica's own unsynced operation could make its next local write reuse that operation's sequence number, so two different operations shared an author and sequence. Found by the simulator. `LogImage` now records the highest issued sequence number.
 
 ### Not yet
 

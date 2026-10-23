@@ -32,6 +32,7 @@ impl LogImage {
             None => w.u8(0),
         }
         w.varint(self.state_hash);
+        w.varint(self.issued);
         w.finish()
     }
 
@@ -50,12 +51,14 @@ impl LogImage {
             other => return Err(CodecError::InvalidTag(other)),
         };
         let state_hash = r.varint()?;
+        let issued = r.varint()?;
         r.finish()?;
         Ok(Self {
             ops,
             compacted,
             floor,
             state_hash,
+            issued,
         })
     }
 }
