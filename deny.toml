@@ -15,4 +15,4 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = ["https://github.com/tpt-solutions/tpt-crypto", "https://github.com/tpt-solutions/tpt-version"]
+allow-git = ["https://github.com/tpt-solutions/tpt-crypto", "https://github.com/tpt-solutions/tpt-version", "https://github.com/tpt-solutions/tpt-webrtc"]

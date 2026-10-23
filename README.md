@@ -32,6 +32,10 @@ tpt-replicate = { git = "https://github.com/tpt-solutions/tpt-replicate", featur
 | *(none)* | The `no_std` core: clocks, log, merge, sync, peers, engine, in-memory transport, in-memory snapshot sink. |
 | `std`    | `SystemClock`, `FileTransport` (delay-tolerant link through a directory), `TcpTransport`, `TcpAcceptor`, `ReconnectingTcp`. |
 | `webrtc` | `WebRtcTransport`, an adapter from a message-oriented data channel to `Transport`. |
+| `webrtc-app` | `webrtc_app::WebRtcLink`, a `Transport` over a real tpt-webrtc data channel (adds tokio and the tpt-webrtc stack). |
+| `ed25519` | `ed25519::Ed25519Signer` and `Ed25519Directory`, real signatures from tpt-crypto. |
+| `version` | `version::VersionSink`, snapshots committed to a tpt-version repository. |
+| `crdt` | `PnCounter`, `OrSet`, `Rga` and `MvRegister`. |
 
 ## Quick start
 

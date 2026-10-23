@@ -66,7 +66,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] Snapshot trigger (hourly / every N ops) -> `SnapshotSink` (tpt-version stub)
 - [x] Tombstone GC: stable frontier (min vector clock acked by all peers) or snapshot-confirmed cutoff
 - [x] Log compaction after snapshot
-- [ ] Swap stubs for real tpt-* crates when available. **Partly done:** signing uses real Ed25519 from tpt-crypto (`ed25519` feature); snapshots commit to tpt-version (`version` feature, `VersionSink`). Still stubbed: operations (not built yet) and webrtc (adapter not written). ActorId stays local by decision.
+- [ ] Swap stubs for real tpt-* crates when available. **Done:** signing (tpt-crypto Ed25519), snapshots (tpt-version commits), and the link (tpt-webrtc data channel, `webrtc-app` feature). **Still stubbed:** operations (not built yet). ActorId stays local by decision.
 - [x] README, rustdoc, examples (CAD vertex move, spreadsheet LWW, rover/orbiter DTN)
 - [ ] Publish v1.0.0 (version, changelog, license, `cargo publish --dry-run`) — version, changelog, license and dry run are done. Not published: the publish itself is outward-facing and needs your go-ahead.
 

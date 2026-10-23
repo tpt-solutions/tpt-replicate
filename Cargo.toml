@@ -27,10 +27,15 @@ ed25519 = ["dep:tpt-crypto-sig"]
 # Snapshots as signed commits in tpt-version (see src/version.rs). Needs Rust 1.85 (edition 2024)
 # and network access to GitHub when enabled.
 version = ["dep:tpt-version"]
+# A Transport over a tpt-webrtc data channel (see src/webrtc_app.rs). Std only. Pulls in tokio and
+# the tpt-webrtc stack, which needs network access to GitHub.
+webrtc-app = ["std", "dep:tpt-webrtc-app", "dep:tokio"]
 
 [dependencies]
 tpt-crypto-sig = { git = "https://github.com/tpt-solutions/tpt-crypto", package = "tpt-crypto-sig", default-features = false, features = ["alloc"], optional = true }
 tpt-version = { git = "https://github.com/tpt-solutions/tpt-version", default-features = false, optional = true }
+tpt-webrtc-app = { git = "https://github.com/tpt-solutions/tpt-webrtc", package = "tpt-webrtc-app", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "time", "net"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
