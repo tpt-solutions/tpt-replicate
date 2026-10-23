@@ -118,7 +118,7 @@ Decisions: single crate, `#![no_std]` + `alloc` (optional `std` feature), local 
 - [x] `crdt` feature: `PnCounter` and `OrSet` (done). **Not done:** RGA list/text, MV-Register
 - [ ] Deterministic network simulator (`sim`): seeded partitions, latency, loss (not started; `MemoryTransport` has loss, duplication and reordering)
 - [ ] Anti-entropy efficiency: range digests or compressed vector clocks (not started)
-- [ ] `Replica::stats()` (done) plus an event/tracing sink (not done)
+- [x] `Replica::stats()` and an event sink (`with_event_observer`). Tracing spans are not wired in
 - [x] Persistence: `Replica::checkpoint` / `recover` with `CheckpointStore`; `MemoryStore` and `FileStore` (atomic save)
 - [ ] Replay protection (session nonce in `Envelope`): deferred. Operations are idempotent, so a replayed frame costs bandwidth but cannot change state; the wire change is not justified without a threat model
 

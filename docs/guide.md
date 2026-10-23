@@ -139,7 +139,7 @@ with the bundled stubs, so they catch changes in the behaviour the engine relies
 
 ## Reading the events
 
-Drain events with `Replica::drain_events()` after each poll. The queue keeps the newest 1,024.
+Drain events with `Replica::drain_events()` after each poll. The queue keeps the newest 1,024. To see every event as it happens, register a callback with `Replica::with_event_observer`.
 
 | Event | Meaning | What to do |
 |-------|---------|------------|

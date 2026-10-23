@@ -463,3 +463,24 @@ fn stats_reports_peer_health_and_pending_depth() {
     .unwrap();
     assert_eq!(b.stats().pending, 1);
 }
+
+#[test]
+fn event_observer_sees_every_event_and_the_queue_still_works() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let clock = ManualClock::new(1_000);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let mut a = replica(1, &clock).with_event_observer(Box::new(move |event: &Event| {
+        sink.borrow_mut().push(event.clone());
+    }));
+    let mut b = replica(2, &clock);
+    link(&mut a, &mut b, 9, Faults::default());
+    settle(&mut [&mut a, &mut b], 4);
+
+    assert!(seen.borrow().contains(&Event::PeerConnected(b.actor())));
+    let queued = a.drain_events();
+    assert!(queued.contains(&Event::PeerConnected(b.actor())));
+    assert_eq!(queued.len(), seen.borrow().len());
+}
