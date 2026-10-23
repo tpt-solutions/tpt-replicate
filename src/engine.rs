@@ -863,8 +863,9 @@ impl<S: State> Replica<S> {
             state_hash: self.state.state_hash(),
             op_count: self.log.len() as u64,
         };
+        let state_bytes = self.state.encode_state();
         let persisted = match self.sink.as_mut() {
-            Some(sink) => sink.persist(&snapshot),
+            Some(sink) => sink.persist(&snapshot, &state_bytes),
             None => return,
         };
         if let Err(error) = persisted {
